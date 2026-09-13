@@ -951,6 +951,25 @@ export default function CreditsPage() {
 
         // 2. Fetch PO items if not already on currentCredit.items
         let items = currentCredit?.items || [];
+        let resolvedPoNum = currentCredit?.poNumber || "";
+        let resolvedPoImg = currentCredit?.poImageUrl || "";
+
+        if (items.length === 0 || !resolvedPoNum || !resolvedPoImg) {
+          try {
+            const cSnap = await getDoc(doc(db, "credits", id));
+            if (cSnap.exists()) {
+              const cData = cSnap.data();
+              if (cData.items && Array.isArray(cData.items) && cData.items.length > 0 && items.length === 0) {
+                items = cData.items;
+              }
+              if (cData.poNumber && !resolvedPoNum) resolvedPoNum = cData.poNumber;
+              if (cData.poImageUrl && !resolvedPoImg) resolvedPoImg = cData.poImageUrl;
+            }
+          } catch (cErr) {
+            console.warn("Could not fetch credit doc in toggleExpand:", cErr);
+          }
+        }
+
         if (items.length === 0 && currentCredit?.invoiceNumber) {
           try {
             const expSnap = await getDocs(
@@ -959,11 +978,19 @@ export default function CreditsPage() {
             if (!expSnap.empty) {
               items = expSnap.docs.map(d => {
                 const ed = d.data();
+                const dName = (ed.itemName || ed.description || ed.name || "صنف").trim();
+                const dQty = Math.max(1, Number(ed.quantity) || 1);
+                const dPrice = Number(ed.unitPrice ?? ed.price ?? 0);
                 return {
                   barcode: ed.barcode || "N/A",
-                  description: ed.itemName || "Unnamed Item",
-                  quantity: ed.quantity || 1,
-                  unitPrice: ed.unitPrice || 0,
+                  description: dName,
+                  name: dName,
+                  itemName: dName,
+                  quantity: dQty,
+                  unitPrice: dPrice,
+                  price: dPrice,
+                  total: Number(ed.total ?? (dQty * dPrice)),
+                  totalPrice: Number(ed.totalPrice ?? (dQty * dPrice))
                 };
               });
             }
@@ -971,7 +998,34 @@ export default function CreditsPage() {
             console.warn("Could not fetch PO items from expiries:", poErr);
           }
         }
-        setCreditPOItems(prev => ({ ...prev, [id]: items }));
+
+        const standardizedItems = items.map((it: any) => {
+          const dName = (it.description || it.name || it.itemName || it.item || "صنف").trim();
+          const dQty = Math.max(1, Number(it.quantity) || 1);
+          const dPrice = Number(it.unitPrice ?? it.price ?? 0);
+          const dTot = Number(it.total ?? it.totalPrice ?? (dQty * dPrice));
+          return {
+            barcode: (it.barcode && it.barcode !== "N/A" ? it.barcode : (it.code || "N/A")).toString().trim(),
+            description: dName,
+            name: dName,
+            itemName: dName,
+            quantity: dQty,
+            unitPrice: dPrice,
+            price: dPrice,
+            total: dTot,
+            totalPrice: dTot
+          };
+        });
+
+        setCreditPOItems(prev => ({ ...prev, [id]: standardizedItems }));
+        if (standardizedItems.length > 0 || resolvedPoNum || resolvedPoImg) {
+          setCredits(prev => prev.map(c => c.id === id ? {
+            ...c,
+            items: standardizedItems,
+            ...(resolvedPoNum ? { poNumber: resolvedPoNum } : {}),
+            ...(resolvedPoImg ? { poImageUrl: resolvedPoImg } : {})
+          } : c));
+        }
 
         // 3. Recalculate true paid amount from history for accuracy
         const calculatedPaid = finalHistory.reduce((sum, payment: any) => sum + Number(payment.amount || 0), 0);
@@ -1450,9 +1504,28 @@ export default function CreditsPage() {
 
         const data = await response.json();
         
-        // User requested to skip saving PO images to storage for faster processing
+        const rawItems = (data.items && Array.isArray(data.items)) ? data.items : [];
+        const standardizedItems = rawItems.map((it: any) => {
+          const dName = (it.description || it.name || it.itemName || it.item || "صنف").trim();
+          const dQty = Math.max(1, Number(it.quantity) || 1);
+          const dPrice = Number(it.unitPrice ?? it.price ?? 0);
+          const dTot = Number(it.total ?? it.totalPrice ?? (dQty * dPrice));
+          return {
+            barcode: (it.barcode && it.barcode !== "N/A" ? it.barcode : (it.code || "N/A")).toString().trim(),
+            description: dName,
+            name: dName,
+            itemName: dName,
+            quantity: dQty,
+            unitPrice: dPrice,
+            price: dPrice,
+            total: dTot,
+            totalPrice: dTot
+          };
+        });
+
         const updateData: any = {
-          items: data.items || []
+          items: standardizedItems,
+          poImageUrl: base64Image
         };
         
         // Only update these fields if they exist and aren't "UNKNOWN"
@@ -1460,20 +1533,37 @@ export default function CreditsPage() {
         if (data.invoiceNumber && data.invoiceNumber !== "UNKNOWN") updateData.invoiceNumber = data.invoiceNumber;
         
         // Sync products to master DB
-        if (data.items && data.items.length > 0) {
+        if (standardizedItems.length > 0) {
           const poDateForSync = selectedCreditForPoUpload?.collectionDate || new Date().toISOString().split('T')[0];
-          await syncProductsToMaster(data.items, poDateForSync, selectedCreditForPoUpload?.companyName || "Unknown Supplier");
+          await syncProductsToMaster(standardizedItems, poDateForSync, selectedCreditForPoUpload?.companyName || "Unknown Supplier");
         }
 
         // Update the document
         if (selectedCreditForPoUpload) {
-          await updateDoc(doc(db, "credits", selectedCreditForPoUpload.id), updateData);
+          await updateDoc(doc(db, "credits", selectedCreditForPoUpload.id), cleanPayload(updateData));
           
+          setCreditPOItems(prev => ({ ...prev, [selectedCreditForPoUpload.id]: standardizedItems }));
+
           // Refresh local state
           setCredits(prev => prev.map(c => 
             c.id === selectedCreditForPoUpload.id ? { ...c, ...updateData } : c
           ));
-          toast.success('PO added to credit and products synchronized!');
+
+          // Sync with any existing cash_payments records for this credit
+          try {
+            const paySnap = await getDocs(query(collection(db, "cash_payments"), where("creditId", "==", selectedCreditForPoUpload.id)));
+            for (const pDoc of paySnap.docs) {
+              await updateDoc(doc(db, "cash_payments", pDoc.id), cleanPayload({
+                items: standardizedItems,
+                ...(updateData.poNumber ? { poNumber: updateData.poNumber } : {}),
+                ...(updateData.poImageUrl ? { poImageUrl: updateData.poImageUrl } : {})
+              }));
+            }
+          } catch (paySyncErr) {
+            console.warn("Could not sync PO to cash_payments:", paySyncErr);
+          }
+
+          toast.success(isAr ? 'تم حفظ أمر الشراء وربطه بالفواتير بنجاح!' : 'PO added to credit and linked payments!');
         }
       } catch (error: any) {
         console.error('Error adding PO to old credit:', error);
@@ -1769,51 +1859,124 @@ export default function CreditsPage() {
     setShowPaymentModal(true);
     fetchPendingReturnsList();
 
-    // Background fetch if items or PO are missing on credit
-    if ((items.length === 0 || !credit.poNumber || !initialPoImage) && (credit.invoiceNumber || credit.id)) {
-      (async () => {
-        try {
-          let fetchedItems: any[] = [];
-          if (credit.invoiceNumber) {
-            const expSnap = await getDocs(
-              query(collection(db, "expiries"), where("invoiceNumber", "==", credit.invoiceNumber))
-            );
-            if (!expSnap.empty) {
-              fetchedItems = expSnap.docs.map(d => {
-                const ed = d.data();
-                return {
-                  barcode: ed.barcode || "N/A",
-                  description: ed.itemName || "Unnamed Item",
-                  quantity: ed.quantity || 1,
-                  unitPrice: ed.unitPrice || 0,
-                };
-              });
+    // Background fetch to guarantee full PO details, documents, and itemized lines from all sources
+    (async () => {
+      try {
+        let fetchedItems: any[] = items;
+        let resolvedPoNum = credit.poNumber || "";
+        let resolvedPoImg = initialPoImage;
+
+        // 1. Direct Credit Document is the PRIMARY source of truth
+        if (credit.id) {
+          const directSnap = await getDoc(doc(db, "credits", credit.id));
+          if (directSnap.exists()) {
+            const dData = directSnap.data();
+            if (dData.poNumber && !resolvedPoNum) {
+              resolvedPoNum = dData.poNumber;
+              setPaymentPoNumber(dData.poNumber);
+            }
+            const foundImg = dData.poImageUrl || dData.poUrl || (dData.poUrls && dData.poUrls[0]) || "";
+            if (foundImg && !resolvedPoImg) {
+              resolvedPoImg = foundImg;
+              setPaymentPoImageUrl(foundImg);
+            }
+            if (dData.items && Array.isArray(dData.items) && dData.items.length > 0 && fetchedItems.length === 0) {
+              fetchedItems = dData.items;
             }
           }
-          if (fetchedItems.length === 0 && credit.id) {
-            const directSnap = await getDoc(doc(db, "credits", credit.id));
-            if (directSnap.exists()) {
-              const dData = directSnap.data();
-              if (dData.items && Array.isArray(dData.items) && dData.items.length > 0) {
-                fetchedItems = dData.items;
-              }
-              if (dData.poNumber && !credit.poNumber) {
-                setPaymentPoNumber(dData.poNumber);
-              }
-              if (dData.poImageUrl && !initialPoImage) {
-                setPaymentPoImageUrl(dData.poImageUrl);
-              }
-            }
-          }
-          if (fetchedItems.length > 0) {
-            setPaymentPoItems(fetchedItems);
-            setCreditPOItems(prev => ({ ...prev, [credit.id]: fetchedItems }));
-          }
-        } catch (e) {
-          console.warn("Could not background fetch PO items for payment modal:", e);
         }
-      })();
-    }
+
+        // 2. Check previous cash_payments or credit_payments linked to this credit/invoice
+        if (fetchedItems.length === 0 || !resolvedPoNum || !resolvedPoImg) {
+          const payQueries = [];
+          if (credit.id) {
+            payQueries.push(getDocs(query(collection(db, "cash_payments"), where("creditId", "==", credit.id), limit(3))));
+            payQueries.push(getDocs(query(collection(db, "credit_payments"), where("creditId", "==", credit.id), limit(3))));
+          }
+          if (credit.invoiceNumber) {
+            payQueries.push(getDocs(query(collection(db, "cash_payments"), where("invoiceNumber", "==", credit.invoiceNumber), limit(3))));
+          }
+          const paySnaps = await Promise.allSettled(payQueries);
+          for (const res of paySnaps) {
+            if (res.status === "fulfilled" && res.value && !res.value.empty) {
+              for (const pDoc of res.value.docs) {
+                const pData = pDoc.data();
+                if (pData.poNumber && !resolvedPoNum) {
+                  resolvedPoNum = pData.poNumber;
+                  setPaymentPoNumber(pData.poNumber);
+                }
+                const pImg = pData.poImageUrl || pData.poUrl || "";
+                if (pImg && !resolvedPoImg) {
+                  resolvedPoImg = pImg;
+                  setPaymentPoImageUrl(pImg);
+                }
+                if (pData.items && Array.isArray(pData.items) && pData.items.length > 0 && fetchedItems.length === 0) {
+                  fetchedItems = pData.items;
+                }
+              }
+            }
+          }
+        }
+
+        // 3. Fallback to expiries collection by invoiceNumber
+        if (fetchedItems.length === 0 && credit.invoiceNumber) {
+          const expSnap = await getDocs(
+            query(collection(db, "expiries"), where("invoiceNumber", "==", credit.invoiceNumber))
+          );
+          if (!expSnap.empty) {
+            fetchedItems = expSnap.docs.map(d => {
+              const ed = d.data();
+              const dName = (ed.itemName || ed.description || ed.name || "صنف").trim();
+              const dQty = Math.max(1, Number(ed.quantity) || 1);
+              const dPrice = Number(ed.unitPrice ?? ed.price ?? 0);
+              return {
+                barcode: ed.barcode || "N/A",
+                description: dName,
+                name: dName,
+                itemName: dName,
+                quantity: dQty,
+                unitPrice: dPrice,
+                price: dPrice,
+                total: Number(ed.total ?? (dQty * dPrice)),
+                totalPrice: Number(ed.totalPrice ?? (dQty * dPrice))
+              };
+            });
+          }
+        }
+
+        // Format and set items safely
+        if (fetchedItems.length > 0) {
+          const standardizedItems = fetchedItems.map((it: any) => {
+            const dName = (it.description || it.name || it.itemName || it.item || "صنف").trim();
+            const dQty = Math.max(1, Number(it.quantity) || 1);
+            const dPrice = Number(it.unitPrice ?? it.price ?? 0);
+            const dTot = Number(it.total ?? it.totalPrice ?? (dQty * dPrice));
+            return {
+              barcode: (it.barcode && it.barcode !== "N/A" ? it.barcode : (it.code || "N/A")).toString().trim(),
+              description: dName,
+              name: dName,
+              itemName: dName,
+              quantity: dQty,
+              unitPrice: dPrice,
+              price: dPrice,
+              total: dTot,
+              totalPrice: dTot
+            };
+          });
+          setPaymentPoItems(standardizedItems);
+          setCreditPOItems(prev => ({ ...prev, [credit.id]: standardizedItems }));
+          // Also update credit in credits state so it immediately reflects
+          setCredits(prev => prev.map(c => c.id === credit.id ? {
+            ...c,
+            items: standardizedItems,
+            ...(resolvedPoNum ? { poNumber: resolvedPoNum } : {}),
+            ...(resolvedPoImg ? { poImageUrl: resolvedPoImg } : {})
+          } : c));
+        }
+      } catch (e) {
+        console.warn("Could not background fetch PO items for payment modal:", e);
+      }
+    })();
   };
 
   const handleProcessPayment = async (e: React.FormEvent) => {
@@ -2002,17 +2165,29 @@ export default function CreditsPage() {
       } : null;
 
       const finalPoNumber = paymentPoNumber.trim() || selectedCreditForPayment.poNumber || "";
-      const finalItems = ((paymentPoItems && paymentPoItems.length > 0)
+      const rawFinalList = ((paymentPoItems && paymentPoItems.length > 0)
         ? paymentPoItems
         : ((selectedCreditForPayment.items && selectedCreditForPayment.items.length > 0)
             ? selectedCreditForPayment.items
-            : (creditPOItems[selectedCreditForPayment.id] || []))).map((it: any) => ({
-          barcode: it.barcode || "N/A",
-          name: it.name || it.itemName || "صنف",
-          quantity: Number(it.quantity) || 1,
-          price: Number(it.price || it.unitPrice) || 0,
-          total: Number(it.total || it.totalPrice) || 0
-        }));
+            : (creditPOItems[selectedCreditForPayment.id] || [])));
+
+      const finalItems = rawFinalList.map((it: any) => {
+        const itemDesc = (it.description || it.name || it.itemName || it.item || "صنف").trim();
+        const itemQty = Math.max(1, Number(it.quantity) || 1);
+        const itemPrice = Number(it.unitPrice ?? it.price ?? 0);
+        const itemTotal = Number(it.total ?? it.totalPrice ?? (itemQty * itemPrice));
+        return {
+          barcode: (it.barcode && it.barcode !== "N/A" ? it.barcode : (it.code || "N/A")).toString().trim(),
+          description: itemDesc,
+          name: itemDesc,
+          itemName: itemDesc,
+          quantity: itemQty,
+          unitPrice: itemPrice,
+          price: itemPrice,
+          total: itemTotal,
+          totalPrice: itemTotal
+        };
+      });
 
       const finalPoImageUrl = paymentPoImageUrl || selectedCreditForPayment.poImageUrl || selectedCreditForPayment.poUrl || (selectedCreditForPayment.poUrls && selectedCreditForPayment.poUrls[0]) || "";
       const finalInvoiceUrl = selectedCreditForPayment.invoiceUrl || (selectedCreditForPayment.invoiceUrls && selectedCreditForPayment.invoiceUrls.length > 0 ? selectedCreditForPayment.invoiceUrls[0] : "");
@@ -2050,13 +2225,13 @@ export default function CreditsPage() {
         creditUpdatePayload.lastEditedAt = new Date().toISOString();
         creditUpdatePayload.lastEditedBy = userEmail;
       }
-      if (finalPoNumber && !selectedCreditForPayment.poNumber) {
+      if (finalPoNumber) {
         creditUpdatePayload.poNumber = finalPoNumber;
       }
-      if (finalItems.length > 0 && (!selectedCreditForPayment.items || selectedCreditForPayment.items.length === 0)) {
+      if (finalItems.length > 0) {
         creditUpdatePayload.items = finalItems;
       }
-      if (finalPoImageUrl && !selectedCreditForPayment.poImageUrl) {
+      if (finalPoImageUrl) {
         creditUpdatePayload.poImageUrl = finalPoImageUrl;
       }
       await updateDoc(doc(db, "credits", selectedCreditForPayment.id), cleanPayload(creditUpdatePayload));
@@ -3526,98 +3701,133 @@ html, body {
 
                           {/* PO Items & Image Area */}
                           <div className="border-t border-slate-800 pt-6 mt-6">
-                            <div className="flex justify-between items-center mb-4">
-                              <div className="flex items-center gap-2">
-                                <ImageIcon className="text-indigo-400" size={18} />
-                                <h4 className="font-bold text-white text-base">
-                                  {isAr ? "تفاصيل أمر الشراء والأصناف (PO Items)" : "Purchase Order Details"}
-                                </h4>
-                                {credit.poNumber && (
-                                  <span className="text-xs font-mono bg-indigo-950 text-indigo-300 border border-indigo-800/60 px-2 py-0.5 rounded-full font-bold">
-                                    PO: {credit.poNumber}
-                                  </span>
-                                )}
-                              </div>
-                              {(!creditPOItems[credit.id] || creditPOItems[credit.id].length === 0) && !credit.poImageUrl && (
-                                <button
-                                  onClick={() => setSelectedCreditForPoUpload(credit)}
-                                  className="text-indigo-400 bg-indigo-950/60 border border-indigo-800/60 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-indigo-900/60 transition-colors flex items-center gap-1 cursor-pointer"
-                                >
-                                  <Plus size={14}/> {isAr ? "إرفاق PO / فاتورة" : "+ Add PO"}
-                                </button>
-                              )}
-                            </div>
+                            {(() => {
+                              const displayPoItems = (creditPOItems[credit.id] && creditPOItems[credit.id].length > 0)
+                                ? creditPOItems[credit.id]
+                                : (credit.items && credit.items.length > 0 ? credit.items : []);
+                              const hasCreditPo = Boolean(
+                                credit.poNumber ||
+                                credit.poImageUrl ||
+                                credit.poUrl ||
+                                (credit.poUrls && credit.poUrls.length > 0) ||
+                                displayPoItems.length > 0
+                              );
 
-                            {/* PO Items Table */}
-                            {creditPOItems[credit.id] && creditPOItems[credit.id].length > 0 && (
-                              <div className="overflow-x-auto border border-slate-800 bg-[#0B1121] rounded-2xl mb-5 shadow-sm">
-                                <table className="w-full text-sm text-left">
-                                  <thead className="text-xs text-slate-400 bg-slate-950/80 border-b border-slate-800 uppercase font-bold tracking-wider">
-                                    <tr>
-                                      <th className="px-4 py-3">#</th>
-                                      <th className="px-4 py-3">Barcode</th>
-                                      <th className="px-4 py-3">Description / اسم الصنف</th>
-                                      <th className="px-4 py-3 text-center">Qty</th>
-                                      <th className="px-4 py-3 text-right">Unit Price</th>
-                                      <th className="px-4 py-3 text-right">Total</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {creditPOItems[credit.id].map((item: any, idx: number) => (
-                                      <tr key={idx} className="border-b border-slate-850/60 last:border-0 font-medium hover:bg-slate-900/40 transition-colors">
-                                        <td className="px-4 py-2.5 text-xs text-slate-500 font-mono">{idx + 1}</td>
-                                        <td className="px-4 py-2.5 text-slate-400 font-mono text-xs">{item.barcode || "N/A"}</td>
-                                        <td className="px-4 py-2.5 text-white font-bold">{item.description || item.itemName || "N/A"}</td>
-                                        <td className="px-4 py-2.5 text-center text-indigo-300 font-bold">{item.quantity}</td>
-                                        <td className="px-4 py-2.5 text-right text-slate-300 font-mono">{Number(item.unitPrice || 0).toFixed(2)}</td>
-                                        <td className="px-4 py-2.5 text-right font-bold text-emerald-400 font-mono">{(Number(item.quantity || 1) * Number(item.unitPrice || 0)).toFixed(2)}</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            )}
+                              return (
+                                <>
+                                  <div className="flex justify-between items-center mb-4">
+                                    <div className="flex items-center gap-2">
+                                      <ImageIcon className="text-indigo-400" size={18} />
+                                      <h4 className="font-bold text-white text-base">
+                                        {isAr ? "تفاصيل أمر الشراء والأصناف (PO Items)" : "Purchase Order Details"}
+                                      </h4>
+                                      {credit.poNumber ? (
+                                        <span className="text-xs font-mono bg-indigo-950 text-indigo-300 border border-indigo-800/60 px-2 py-0.5 rounded-full font-bold">
+                                          PO: {credit.poNumber}
+                                        </span>
+                                      ) : displayPoItems.length > 0 ? (
+                                        <span className="text-xs font-mono bg-emerald-950 text-emerald-300 border border-emerald-800/60 px-2 py-0.5 rounded-full font-bold">
+                                          {isAr ? "مرفق أصناف" : "Items Attached"}
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                    {!hasCreditPo ? (
+                                      <button
+                                        onClick={() => setSelectedCreditForPoUpload(credit)}
+                                        className="text-indigo-400 bg-indigo-950/60 border border-indigo-800/60 px-3.5 py-1.5 rounded-xl text-xs font-bold hover:bg-indigo-900/60 transition-colors flex items-center gap-1 cursor-pointer"
+                                      >
+                                        <Plus size={14}/> {isAr ? "إرفاق PO / فاتورة" : "+ Add PO"}
+                                      </button>
+                                    ) : (
+                                      <button
+                                        onClick={() => setSelectedCreditForPoUpload(credit)}
+                                        className="text-slate-400 hover:text-indigo-300 bg-slate-900/60 border border-slate-800 px-3 py-1 rounded-xl text-xs font-bold transition-colors flex items-center gap-1 cursor-pointer"
+                                        title={isAr ? "تعديل أو إعادة رفع أمر الشراء" : "Change or re-upload PO"}
+                                      >
+                                        <Pencil size={12}/> {isAr ? "تعديل الـ PO" : "Edit PO"}
+                                      </button>
+                                    )}
+                                  </div>
 
-                            {/* Scanned PO Image Preview & Gallery */}
-                            {(credit.poImageUrl || credit.poUrl || (credit.poUrls && credit.poUrls.length > 0)) && (
-                              <div className="mt-4">
-                                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
-                                  <ImageIcon size={14} className="text-indigo-400" />
-                                  {isAr ? "مرفقات ومستندات الفاتورة وأمر الشراء" : "Scanned PO & Invoice Documents"}
-                                </p>
-                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                                  {[
-                                    ...(credit.poImageUrl ? [credit.poImageUrl] : []),
-                                    ...(credit.poUrl ? [credit.poUrl] : []),
-                                    ...(credit.poUrls || []),
-                                    ...(credit.invoiceUrl ? [credit.invoiceUrl] : []),
-                                    ...(credit.invoiceUrls || [])
-                                  ].filter((v, i, a) => a.indexOf(v) === i).map((imgUrl, imgIdx) => (
-                                    <div 
-                                      key={imgIdx}
-                                      onClick={() => setPreviewImage({ url: imgUrl, title: `Document ${imgIdx + 1} - ${credit.companyName}` })}
-                                      className="relative group border border-slate-800 rounded-2xl overflow-hidden bg-[#0B1121] aspect-video cursor-pointer hover:border-indigo-500/80 transition-all shadow-md"
-                                    >
-                                      <img 
-                                        src={imgUrl} 
-                                        alt={`PO Doc ${imgIdx + 1}`} 
-                                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-                                      />
-                                      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center gap-2 transition-opacity">
-                                        <Eye size={18} className="text-white" />
-                                        <span className="text-xs font-bold text-white">{isAr ? "عرض" : "View"}</span>
+                                  {/* PO Items Table */}
+                                  {displayPoItems.length > 0 && (
+                                    <div className="overflow-x-auto border border-slate-800 bg-[#0B1121] rounded-2xl mb-5 shadow-sm">
+                                      <table className="w-full text-sm text-left">
+                                        <thead className="text-xs text-slate-400 bg-slate-950/80 border-b border-slate-800 uppercase font-bold tracking-wider">
+                                          <tr>
+                                            <th className="px-4 py-3">#</th>
+                                            <th className="px-4 py-3">Barcode</th>
+                                            <th className="px-4 py-3">{isAr ? "الوصف / اسم الصنف" : "Description"}</th>
+                                            <th className="px-4 py-3 text-center">Qty</th>
+                                            <th className="px-4 py-3 text-right">Unit Price</th>
+                                            <th className="px-4 py-3 text-right">Total</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {displayPoItems.map((item: any, idx: number) => {
+                                            const desc = item.description || item.name || item.itemName || item.item || "صنف";
+                                            const qty = Math.max(1, Number(item.quantity) || 1);
+                                            const unitPrice = Number(item.unitPrice ?? item.price ?? 0);
+                                            const lineTotal = Number(item.total ?? item.totalPrice ?? (qty * unitPrice));
+                                            return (
+                                              <tr key={idx} className="border-b border-slate-850/60 last:border-0 font-medium hover:bg-slate-900/40 transition-colors">
+                                                <td className="px-4 py-2.5 text-xs text-slate-500 font-mono">{idx + 1}</td>
+                                                <td className="px-4 py-2.5 text-slate-400 font-mono text-xs">{item.barcode || item.code || "N/A"}</td>
+                                                <td className="px-4 py-2.5 text-white font-bold">{desc}</td>
+                                                <td className="px-4 py-2.5 text-center text-indigo-300 font-bold">{qty}</td>
+                                                <td className="px-4 py-2.5 text-right text-slate-300 font-mono">{unitPrice > 0 ? unitPrice.toFixed(2) : "-"}</td>
+                                                <td className="px-4 py-2.5 text-right font-bold text-emerald-400 font-mono">{lineTotal > 0 ? lineTotal.toFixed(2) : "-"}</td>
+                                              </tr>
+                                            );
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  )}
+
+                                  {/* Scanned PO Image Preview & Gallery */}
+                                  {(credit.poImageUrl || credit.poUrl || (credit.poUrls && credit.poUrls.length > 0)) && (
+                                    <div className="mt-4">
+                                      <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
+                                        <ImageIcon size={14} className="text-indigo-400" />
+                                        {isAr ? "مرفقات ومستندات الفاتورة وأمر الشراء" : "Scanned PO & Invoice Documents"}
+                                      </p>
+                                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                                        {[
+                                          ...(credit.poImageUrl ? [credit.poImageUrl] : []),
+                                          ...(credit.poUrl ? [credit.poUrl] : []),
+                                          ...(credit.poUrls || []),
+                                          ...(credit.invoiceUrl ? [credit.invoiceUrl] : []),
+                                          ...(credit.invoiceUrls || [])
+                                        ].filter((v, i, a) => a.indexOf(v) === i).map((imgUrl, imgIdx) => (
+                                          <div 
+                                            key={imgIdx}
+                                            onClick={() => setPreviewImage({ url: imgUrl, title: `Document ${imgIdx + 1} - ${credit.companyName}` })}
+                                            className="relative group border border-slate-800 rounded-2xl overflow-hidden bg-[#0B1121] aspect-video cursor-pointer hover:border-indigo-500/80 transition-all shadow-md"
+                                          >
+                                            <img 
+                                              src={imgUrl} 
+                                              alt={`PO Doc ${imgIdx + 1}`} 
+                                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                                            />
+                                            <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center gap-2 transition-opacity">
+                                              <Eye size={18} className="text-white" />
+                                              <span className="text-xs font-bold text-white">{isAr ? "عرض" : "View"}</span>
+                                            </div>
+                                          </div>
+                                        ))}
                                       </div>
                                     </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                            
-                            {(!creditPOItems[credit.id] || creditPOItems[credit.id].length === 0) && !credit.poImageUrl && !credit.poUrl && (!credit.poUrls || credit.poUrls.length === 0) && (
-                              <div className="text-center py-6 bg-[#0B1121] rounded-xl border border-dashed border-slate-800">
-                                <p className="text-xs font-bold text-slate-500">{isAr ? "لا يوجد أمر شراء أو أصناف مرفقة" : "No PO items or documents attached"}</p>
-                              </div>
-                            )}
+                                  )}
+                                  
+                                  {!hasCreditPo && (
+                                    <div className="text-center py-6 bg-[#0B1121] rounded-xl border border-dashed border-slate-800">
+                                      <p className="text-xs font-bold text-slate-500">{isAr ? "لا يوجد أمر شراء أو أصناف مرفقة" : "No PO items or documents attached"}</p>
+                                    </div>
+                                  )}
+                                </>
+                              );
+                            })()}
                           </div>
                         </div>
                       </motion.div>

@@ -1554,20 +1554,87 @@ export default function PaymentsRedesignPage() {
   }, [selectedPaymentForPrint]);
 
   useEffect(() => {
-    if (selectedPaymentForView?.id) {
-      const unsub = onSnapshot(doc(db, "cash_payments", selectedPaymentForView.id), (docSnap) => {
-        if (docSnap.exists()) {
-          const data = docSnap.data();
-          if (data.invoiceUrl && data.invoiceUrl !== selectedPaymentForView.invoiceUrl) {
-            setSelectedPaymentForView((prev: any) => ({ ...prev, ...data }));
-            setPayments((prev) => prev.map(p => p.id === selectedPaymentForView.id ? { ...p, ...data } : p));
-            toast.success("Supplier invoice uploaded via mobile!");
-          }
+    if (!selectedPaymentForView?.id) return;
+
+    const unsub = onSnapshot(doc(db, "cash_payments", selectedPaymentForView.id), (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.invoiceUrl && data.invoiceUrl !== selectedPaymentForView.invoiceUrl) {
+          setSelectedPaymentForView((prev: any) => ({ ...prev, ...data }));
+          setPayments((prev) => prev.map(p => p.id === selectedPaymentForView.id ? { ...p, ...data } : p));
+          toast.success("Supplier invoice uploaded via mobile!");
         }
+      }
+    });
+
+    // Also enrich from linked credit if PO number, PO image, or items are missing
+    const credId = selectedPaymentForView.creditId;
+    const hasItems = selectedPaymentForView.items && selectedPaymentForView.items.length > 0;
+    const hasPoNumber = Boolean(selectedPaymentForView.poNumber);
+    const hasPoImage = Boolean(selectedPaymentForView.poImageUrl);
+
+    if (credId && (!hasItems || !hasPoNumber || !hasPoImage)) {
+      getDoc(doc(db, "credits", credId)).then((cSnap) => {
+        if (cSnap.exists()) {
+          const cData = cSnap.data();
+          const rawItems = (cData.items && Array.isArray(cData.items) && cData.items.length > 0)
+            ? cData.items
+            : (selectedPaymentForView.items || []);
+
+          const standardizedItems = rawItems.map((it: any) => {
+            const itemDesc = (it.description || it.name || it.itemName || it.item || "صنف").trim();
+            const itemQty = Math.max(1, Number(it.quantity ?? it.qty ?? 1) || 1);
+            const itemPrice = Number(it.unitPrice ?? it.price ?? 0);
+            const itemTotal = Number(it.total ?? it.totalPrice ?? (itemQty * itemPrice));
+            return {
+              ...it,
+              barcode: (it.barcode && it.barcode !== "N/A" ? it.barcode : (it.code || "N/A")).toString().trim(),
+              description: itemDesc,
+              name: itemDesc,
+              itemName: itemDesc,
+              quantity: itemQty,
+              unitPrice: itemPrice,
+              price: itemPrice,
+              total: itemTotal,
+              totalPrice: itemTotal
+            };
+          });
+
+          const resolvedPoNumber = selectedPaymentForView.poNumber || cData.poNumber || "";
+          const resolvedPoImage = selectedPaymentForView.poImageUrl || cData.poImageUrl || cData.poUrl || (cData.poUrls && cData.poUrls[0]) || "";
+          const resolvedInvoiceUrl = selectedPaymentForView.invoiceUrl || cData.invoiceUrl || "";
+
+          setSelectedPaymentForView((prev: any) => {
+            if (!prev || prev.id !== selectedPaymentForView.id) return prev;
+            return {
+              ...prev,
+              items: standardizedItems.length > 0 ? standardizedItems : prev.items,
+              poNumber: resolvedPoNumber,
+              poImageUrl: resolvedPoImage,
+              invoiceUrl: resolvedInvoiceUrl,
+              invoiceUrls: prev.invoiceUrls?.length ? prev.invoiceUrls : (cData.invoiceUrls || (cData.invoiceUrl ? [cData.invoiceUrl] : [])),
+            };
+          });
+
+          setPayments((prev) => prev.map(p => {
+            if (p.id === selectedPaymentForView.id) {
+              return {
+                ...p,
+                items: standardizedItems.length > 0 ? standardizedItems : p.items,
+                poNumber: p.poNumber || resolvedPoNumber,
+                poImageUrl: p.poImageUrl || resolvedPoImage,
+              };
+            }
+            return p;
+          }));
+        }
+      }).catch((err) => {
+        console.error("Failed to enrich payment view from credit:", err);
       });
-      return () => unsub();
     }
-  }, [selectedPaymentForView?.id]);
+
+    return () => unsub();
+  }, [selectedPaymentForView?.id, selectedPaymentForView?.creditId]);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
@@ -1757,19 +1824,48 @@ export default function PaymentsRedesignPage() {
 
       let newItems: any[] = [];
       if (data.items && Array.isArray(data.items)) {
-        newItems = data.items;
+        newItems = data.items.map((it: any) => {
+          const itemDesc = (it.description || it.name || it.itemName || it.item || "صنف").trim();
+          const itemQty = Math.max(1, Number(it.quantity ?? it.qty ?? 1) || 1);
+          const itemPrice = Number(it.unitPrice ?? it.price ?? 0);
+          const itemTotal = Number(it.total ?? it.totalPrice ?? (itemQty * itemPrice));
+          return {
+            barcode: (it.barcode && it.barcode !== "N/A" ? it.barcode : (it.code || "N/A")).toString().trim(),
+            description: itemDesc,
+            name: itemDesc,
+            itemName: itemDesc,
+            quantity: itemQty,
+            unitPrice: itemPrice,
+            price: itemPrice,
+            total: itemTotal,
+            totalPrice: itemTotal
+          };
+        });
       }
 
-      // User requested to skip saving PO images to storage for faster processing
       const updateData: any = {};
+      if (base64Image) {
+        updateData.poImageUrl = base64Image;
+      }
       if (newItems.length > 0) updateData.items = newItems;
-      if (data.poNumber && !selectedPaymentForPoUpload.poNumber) updateData.poNumber = data.poNumber;
+      if (data.poNumber) updateData.poNumber = data.poNumber;
 
       await updateDoc(doc(db, "cash_payments", selectedPaymentForPoUpload.id), updateData);
 
       // Sync products to the secondary Firebase db
       if (newItems.length > 0) {
         syncProductsToMaster(newItems, data.date || selectedPaymentForPoUpload.date || new Date().toISOString().split('T')[0], selectedPaymentForPoUpload.companyName);
+      }
+
+      // If linked to a credit, also sync to the credit document in Firestore
+      if (selectedPaymentForPoUpload.creditId) {
+        try {
+          const creditRef = doc(db, "credits", selectedPaymentForPoUpload.creditId);
+          await updateDoc(creditRef, updateData);
+          setCredits(prev => prev.map(c => c.id === selectedPaymentForPoUpload.creditId ? { ...c, ...updateData } : c));
+        } catch (cErr) {
+          console.error("Failed to sync PO to credit document:", cErr);
+        }
       }
 
       setPayments(prev => prev.map(p => {
@@ -1836,7 +1932,17 @@ export default function PaymentsRedesignPage() {
       if (data.tax !== undefined) setTax(data.tax.toString());
 
       if (data.items && Array.isArray(data.items)) {
-        setPoItems(data.items);
+        setPoItems(data.items.map((it: any) => {
+          const itemDesc = (it.description || it.name || it.itemName || it.item || "صنف").trim();
+          const itemQty = Math.max(1, Number(it.quantity ?? it.qty ?? 1) || 1);
+          const itemPrice = Number(it.unitPrice ?? it.price ?? 0);
+          return {
+            barcode: (it.barcode && it.barcode !== "N/A" ? it.barcode : (it.code || "N/A")).toString().trim(),
+            description: itemDesc,
+            quantity: itemQty,
+            unitPrice: itemPrice,
+          };
+        }));
       }
 
       toast.success('PO processed successfully!');
@@ -2022,7 +2128,23 @@ export default function PaymentsRedesignPage() {
 
       const isOrderCategory = category === "order";
       const finalPoNumber = isOrderCategory ? poNumber.trim() : "";
-      const finalPoItems = isOrderCategory ? poItems : [];
+      const finalPoItems = (isOrderCategory ? poItems : []).map((it: any) => {
+        const itemDesc = (it.description || it.name || it.itemName || it.item || "صنف").trim();
+        const itemQty = Math.max(1, Number(it.quantity ?? it.qty ?? 1) || 1);
+        const itemPrice = Number(it.unitPrice ?? it.price ?? 0);
+        const itemTotal = Number(it.total ?? it.totalPrice ?? (itemQty * itemPrice));
+        return {
+          barcode: (it.barcode && it.barcode !== "N/A" ? it.barcode : (it.code || "N/A")).toString().trim(),
+          description: itemDesc,
+          name: itemDesc,
+          itemName: itemDesc,
+          quantity: itemQty,
+          unitPrice: itemPrice,
+          price: itemPrice,
+          total: itemTotal,
+          totalPrice: itemTotal
+        };
+      });
       const finalPoImageUrl = isOrderCategory ? poImageUrl : "";
 
       const isPendingSource = hasReturn && returnSource === "pending" && !!selectedPendingReturn;
@@ -2744,7 +2866,6 @@ html, body {
   // Helper to enrich payment with linked credit data (PO, items, invoice images) if missing
   const getEnrichedPayment = useCallback((p: any) => {
     if (!p) return p;
-    if (!p.creditId && !p.invoiceNumber) return p;
 
     // Fast O(1) matching credit lookup
     let matchingCredit = null;
@@ -2755,30 +2876,57 @@ html, body {
       const key = `${p.invoiceNumber.toLowerCase().trim()}___${(p.companyName || "").toLowerCase().trim()}`;
       matchingCredit = creditLookup.byInv.get(key) || credits.find(c => c.invoiceNumber === p.invoiceNumber);
     }
-
-    if (!matchingCredit) return p;
+    if (!matchingCredit && p.poNumber) {
+      matchingCredit = credits.find(c => c.poNumber && c.poNumber === p.poNumber);
+    }
 
     const enriched = { ...p };
-    if (!enriched.poNumber && matchingCredit.poNumber) {
-      enriched.poNumber = matchingCredit.poNumber;
+
+    if (matchingCredit) {
+      if (!enriched.poNumber && matchingCredit.poNumber) {
+        enriched.poNumber = matchingCredit.poNumber;
+      }
+      if ((!enriched.items || enriched.items.length === 0) && matchingCredit.items && matchingCredit.items.length > 0) {
+        enriched.items = matchingCredit.items;
+      }
+      if (!enriched.poImageUrl) {
+        enriched.poImageUrl = matchingCredit.poImageUrl || matchingCredit.poUrl || (matchingCredit.poUrls && matchingCredit.poUrls[0]) || "";
+      }
+      if (!enriched.invoiceUrl && matchingCredit.invoiceUrl) {
+        enriched.invoiceUrl = matchingCredit.invoiceUrl;
+      }
+      if ((!enriched.invoiceUrls || enriched.invoiceUrls.length === 0) && matchingCredit.invoiceUrls && matchingCredit.invoiceUrls.length > 0) {
+        enriched.invoiceUrls = matchingCredit.invoiceUrls;
+      } else if ((!enriched.invoiceUrls || enriched.invoiceUrls.length === 0) && matchingCredit.invoiceUrl) {
+        enriched.invoiceUrls = [matchingCredit.invoiceUrl];
+      }
+      if (!enriched.managerSignature && matchingCredit.managerSignature) {
+        enriched.managerSignature = matchingCredit.managerSignature;
+      }
     }
-    if ((!enriched.items || enriched.items.length === 0) && matchingCredit.items && matchingCredit.items.length > 0) {
-      enriched.items = matchingCredit.items;
+
+    // Standardize all items so barcode, description, name, quantity, unitPrice, price, total, totalPrice are ALWAYS defined
+    if (enriched.items && Array.isArray(enriched.items) && enriched.items.length > 0) {
+      enriched.items = enriched.items.map((it: any) => {
+        const itemDesc = (it.description || it.name || it.itemName || it.item || "صنف").trim();
+        const itemQty = Math.max(1, Number(it.quantity ?? it.qty ?? 1) || 1);
+        const itemPrice = Number(it.unitPrice ?? it.price ?? 0);
+        const itemTotal = Number(it.total ?? it.totalPrice ?? (itemQty * itemPrice));
+        return {
+          ...it,
+          barcode: (it.barcode && it.barcode !== "N/A" ? it.barcode : (it.code || "N/A")).toString().trim(),
+          description: itemDesc,
+          name: itemDesc,
+          itemName: itemDesc,
+          quantity: itemQty,
+          unitPrice: itemPrice,
+          price: itemPrice,
+          total: itemTotal,
+          totalPrice: itemTotal
+        };
+      });
     }
-    if (!enriched.poImageUrl) {
-      enriched.poImageUrl = matchingCredit.poImageUrl || matchingCredit.poUrl || (matchingCredit.poUrls && matchingCredit.poUrls[0]) || "";
-    }
-    if (!enriched.invoiceUrl && matchingCredit.invoiceUrl) {
-      enriched.invoiceUrl = matchingCredit.invoiceUrl;
-    }
-    if ((!enriched.invoiceUrls || enriched.invoiceUrls.length === 0) && matchingCredit.invoiceUrls && matchingCredit.invoiceUrls.length > 0) {
-      enriched.invoiceUrls = matchingCredit.invoiceUrls;
-    } else if ((!enriched.invoiceUrls || enriched.invoiceUrls.length === 0) && matchingCredit.invoiceUrl) {
-      enriched.invoiceUrls = [matchingCredit.invoiceUrl];
-    }
-    if (!enriched.managerSignature && matchingCredit.managerSignature) {
-      enriched.managerSignature = matchingCredit.managerSignature;
-    }
+
     return enriched;
   }, [creditLookup, credits]);
 
@@ -3857,7 +4005,7 @@ html, body {
                         </div>
 
                         <div className="flex items-center gap-1.5 sm:gap-2">
-                          {(pay.category === "order" || pay.category === "credit" || !!pay.creditId) && (!pay.items || pay.items.length === 0) && !pay.poImageUrl && (
+                          {(pay.category === "order" || pay.category === "credit" || !!pay.creditId) && (!pay.poNumber && !pay.poImageUrl && (!pay.items || pay.items.length === 0)) && (
                             <button
                               onClick={() => setSelectedPaymentForPoUpload(pay)}
                               className="text-xs font-bold bg-blue-500/15 text-blue-400 hover:bg-blue-500/25 border border-blue-500/30 px-3 py-1.5 rounded-xl transition-all flex items-center gap-1 mr-1 cursor-pointer"
@@ -5266,31 +5414,44 @@ html, body {
                       );
                     })()}
 
-                    <h3 className="text-sm font-black text-slate-400 uppercase tracking-wider mb-4">{isAr ? `الأصناف والمحتويات (${selectedPaymentForView.items?.length || 0})` : `Products / Items (${selectedPaymentForView.items?.length || 0})`}</h3>
-                    <div className="overflow-x-auto border border-slate-100 dark:border-slate-800 rounded-2xl">
-                      <table className="w-full text-sm text-left">
-                        <thead className="text-xs text-slate-500 bg-slate-50 dark:bg-slate-800/50 uppercase font-bold">
-                          <tr>
-                            <th className="px-4 py-3">{isAr ? "الباركود" : "Barcode"}</th>
-                            <th className="px-4 py-3">{isAr ? "الوصف" : "Description"}</th>
-                            <th className="px-4 py-3 text-center">{isAr ? "الكمية" : "Qty"}</th>
-                            <th className="px-4 py-3 text-right">{isAr ? "سعر الوحدة" : "Unit Price"}</th>
-                            <th className="px-4 py-3 text-right">{isAr ? "الإجمالي" : "Total"}</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {selectedPaymentForView.items?.map((item: any, idx: number) => (
-                            <tr key={idx} className="border-b border-slate-50 dark:border-slate-800/50 last:border-0 font-medium">
-                              <td className="px-4 py-3 text-slate-500">{item.barcode || (isAr ? "غير متاح" : "N/A")}</td>
-                              <td className="px-4 py-3 text-slate-900 dark:text-slate-300">{item.description || (isAr ? "غير متاح" : "N/A")}</td>
-                              <td className="px-4 py-3 text-center text-slate-900 dark:text-slate-300">{item.quantity}</td>
-                              <td className="px-4 py-3 text-right text-slate-900 dark:text-slate-300">{Number(item.unitPrice).toFixed(2)}</td>
-                              <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-slate-300">{(item.quantity * item.unitPrice).toFixed(2)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                    {selectedPaymentForView.items && selectedPaymentForView.items.length > 0 ? (
+                      <>
+                        <h3 className="text-sm font-black text-slate-400 uppercase tracking-wider mb-4">{isAr ? `الأصناف والمحتويات (${selectedPaymentForView.items.length})` : `Products / Items (${selectedPaymentForView.items.length})`}</h3>
+                        <div className="overflow-x-auto border border-slate-100 dark:border-slate-800 rounded-2xl">
+                          <table className="w-full text-sm text-left">
+                            <thead className="text-xs text-slate-500 bg-slate-50 dark:bg-slate-800/50 uppercase font-bold">
+                              <tr>
+                                <th className="px-4 py-3">{isAr ? "الباركود" : "Barcode"}</th>
+                                <th className="px-4 py-3">{isAr ? "الوصف" : "Description"}</th>
+                                <th className="px-4 py-3 text-center">{isAr ? "الكمية" : "Qty"}</th>
+                                <th className="px-4 py-3 text-right">{isAr ? "سعر الوحدة" : "Unit Price"}</th>
+                                <th className="px-4 py-3 text-right">{isAr ? "الإجمالي" : "Total"}</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {selectedPaymentForView.items.map((item: any, idx: number) => {
+                                const desc = item.description || item.name || item.itemName || item.item || (isAr ? "غير متاح" : "N/A");
+                                const qty = Number(item.quantity ?? item.qty ?? 1);
+                                const rawUnitPrice = item.unitPrice !== undefined ? Number(item.unitPrice) : (item.price !== undefined ? Number(item.price) : NaN);
+                                const rawTotal = item.total !== undefined ? Number(item.total) : (item.totalPrice !== undefined ? Number(item.totalPrice) : (!isNaN(rawUnitPrice) ? qty * rawUnitPrice : NaN));
+                                const displayUnitPrice = !isNaN(rawUnitPrice) ? (rawUnitPrice > 0 ? rawUnitPrice.toFixed(2) : "-") : (!isNaN(rawTotal) && qty > 0 ? (rawTotal / qty).toFixed(2) : "-");
+                                const displayTotal = !isNaN(rawTotal) ? (rawTotal > 0 ? rawTotal.toFixed(2) : "-") : (!isNaN(rawUnitPrice) && rawUnitPrice > 0 ? (qty * rawUnitPrice).toFixed(2) : "-");
+
+                                return (
+                                  <tr key={idx} className="border-b border-slate-50 dark:border-slate-800/50 last:border-0 font-medium">
+                                    <td className="px-4 py-3 text-slate-500 font-mono">{item.barcode || (isAr ? "غير متاح" : "N/A")}</td>
+                                    <td className="px-4 py-3 text-slate-900 dark:text-slate-300 font-medium">{desc}</td>
+                                    <td className="px-4 py-3 text-center text-slate-900 dark:text-slate-300 font-mono">{qty}</td>
+                                    <td className="px-4 py-3 text-right text-slate-900 dark:text-slate-300 font-mono">{displayUnitPrice}</td>
+                                    <td className="px-4 py-3 text-right font-bold text-slate-900 dark:text-slate-300 font-mono">{displayTotal}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </>
+                    ) : null}
 
                     {/* Smart QR Code at bottom */}
                     <div className="flex flex-col items-center justify-center mt-8 pt-8 border-t border-dashed border-slate-300 dark:border-slate-700">

@@ -58,6 +58,16 @@ export function sanitizeCreditForCache(credit: any) {
     isTaxable: Boolean(credit.isTaxable),
     onSalesOnly: Boolean(credit.onSalesOnly),
     poNumber: credit.poNumber || "",
+    poImageUrl: (credit.poImageUrl && credit.poImageUrl.length < 2500) ? credit.poImageUrl : "",
+    items: Array.isArray(credit.items) ? credit.items.slice(0, 30).map((it: any) => ({
+      barcode: it.barcode || "N/A",
+      description: it.description || it.name || it.itemName || "",
+      name: it.name || it.description || it.itemName || "",
+      quantity: Number(it.quantity) || 1,
+      unitPrice: Number(it.unitPrice ?? it.price ?? 0),
+      price: Number(it.price ?? it.unitPrice ?? 0),
+      total: Number(it.total ?? it.totalPrice ?? 0)
+    })) : [],
     status: credit.status || "open",
     storeId: credit.storeId || "",
     tax: Number(credit.tax || 0),
@@ -66,6 +76,9 @@ export function sanitizeCreditForCache(credit: any) {
     date: credit.date || "",
     supplierRepName: credit.supplierRepName || "",
     isEdited: Boolean(credit.isEdited),
+    settledAsFull: Boolean(credit.settledAsFull),
+    settlementReason: credit.settlementReason || "",
+    waivedAmount: Number(credit.waivedAmount || 0),
   };
 }
 
