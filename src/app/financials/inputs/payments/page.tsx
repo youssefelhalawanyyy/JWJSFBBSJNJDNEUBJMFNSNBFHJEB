@@ -935,7 +935,27 @@ import { motion, AnimatePresence } from "framer-motion";
 import { syncProductsToMaster } from "@/lib/products-sync";
 import { playPrinterSound } from "@/lib/audioCues";
 
-const compressImage = (file: File, maxWidth: number = 1200, quality: number = 0.75): Promise<string> => {
+function cleanPayload<T = any>(obj: any): T {
+  if (obj === null || obj === undefined) return null as any;
+  if (typeof obj !== "object") {
+    if (typeof obj === "number" && isNaN(obj)) return 0 as any;
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj
+      .filter((item) => item !== undefined)
+      .map((item) => cleanPayload(item)) as any;
+  }
+  const cleaned: Record<string, any> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      cleaned[key] = cleanPayload(value);
+    }
+  }
+  return cleaned as any;
+}
+
+const compressImage = (file: File, maxWidth: number = 800, quality: number = 0.65): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);
@@ -1069,20 +1089,20 @@ export default function PaymentsRedesignPage() {
   const { language } = useLanguage();
   const isAr = language === "ar";
   const branchIds = useMemo(() => {
-    const ids = [];
-    if (currentBranch === "all") {
-      // no filter
-    } else if (currentBranch === "alamein4") {
-      ids.push("eL-alamein-4");
-    } else if (currentBranch === "ola") {
-      ids.push("ola-el-koronfol");
+    const b = currentBranch as string;
+    if (b === "all") {
+      return [];
+    } else if (b === "alamein4" || b === "el-alamein-4") {
+      return ["eL-alamein-4", "alamein4", "el-alamein-4", "alamein", "alamein-4"];
+    } else if (b === "ola" || b === "ola-el-koronfol") {
+      return ["ola-el-koronfol", "ola", "ola_el_koronfol", "el-koronfol"];
     } else {
-      ids.push(currentBranch);
+      return [b];
     }
-    return ids;
   }, [currentBranch]);
 
   const [currentUser, setCurrentUser] = useState<any>(null);
+  const [highlightPaymentId, setHighlightPaymentId] = useState<string | null>(null);
   const [payments, setPayments] = useState<any[]>(() => {
     if (typeof window !== "undefined") {
       try {
@@ -1107,6 +1127,11 @@ export default function PaymentsRedesignPage() {
   // Filters
   const [searchQuery, setSearchQuery] = useState("");
   const [monthFilter, setMonthFilter] = useState(() => {
+    if (typeof window !== "undefined") {
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlMonth = urlParams.get("month");
+      if (urlMonth) return urlMonth;
+    }
     const today = new Date();
     const mm = String(today.getMonth() + 1).padStart(2, '0');
     return `${today.getFullYear()}-${mm}`;
@@ -1116,17 +1141,28 @@ export default function PaymentsRedesignPage() {
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       const s = params.get("search");
+      const m = params.get("month");
+      const h = params.get("highlight");
+
+      if (h) {
+        setHighlightPaymentId(h);
+      }
+      if (m) {
+        setMonthFilter(m);
+      }
       if (s) {
         setSearchQuery(s);
-        const m = params.get("month");
-        if (m) {
-          setMonthFilter(m);
-        } else {
+        if (!m) {
           setMonthFilter(""); // clear month filter so searched PO/invoice across all months is shown!
         }
-        // Clean URL immediately so that refreshing the page resets the search to blank
+      }
+      // Clean URL params cleanly so page reload starts with a fresh clean state
+      if (s || h) {
         try {
-          window.history.replaceState(null, "", window.location.pathname);
+          const url = new URL(window.location.href);
+          url.searchParams.delete("search");
+          url.searchParams.delete("highlight");
+          window.history.replaceState(null, "", url.toString());
         } catch (_) {}
       }
     }
@@ -1550,6 +1586,18 @@ export default function PaymentsRedesignPage() {
     }
   }, [currentUser, currentBranch, monthFilter]);
 
+  useEffect(() => {
+    const handleSync = () => {
+      if (currentUser) {
+        fetchData();
+      }
+    };
+    if (typeof window !== "undefined") {
+      window.addEventListener("circlek_financials_updated", handleSync);
+      return () => window.removeEventListener("circlek_financials_updated", handleSync);
+    }
+  }, [currentUser, currentBranch, monthFilter]);
+
   const fetchData = async () => {
     const hasCached = typeof window !== "undefined" && !!localStorage.getItem('cached_detailed_payments');
     if (!hasCached) {
@@ -1951,11 +1999,10 @@ export default function PaymentsRedesignPage() {
         toast.error(isAr ? "قيمة خصم المرتجع لا يمكن أن تتجاوز إجمالي قيمة الفاتورة." : "Return deduction cannot exceed gross invoice total.");
         return;
       }
-      if (!returnTransferOutNumber.trim()) {
-        toast.error(isAr ? "برجاء إدخال رقم إذن خروج البضاعة (TR Number)." : "Please enter the Outbound Transfer # (TR).");
-        return;
-      }
     }
+
+    // Auto-generate fallback TR Number if not provided
+    const finalTransferOutNum = returnTransferOutNumber.trim() || (hasReturn ? `TR-${Date.now().toString().slice(-6)}` : "");
 
     const netTotal = Math.max(0, grossTotal - numReturnAmount);
     // Safe accounting: Safe balance outflow is (p.amount + p.tax)
@@ -1969,7 +2016,7 @@ export default function PaymentsRedesignPage() {
 
       if (method === 'bank_transfer' && bankTransferFile) {
         toast.loading("Processing bank transfer receipt...", { id: "bank-upload" });
-        bankTransferReceiptUrl = await compressImage(bankTransferFile, 2000, 0.9);
+        bankTransferReceiptUrl = await compressImage(bankTransferFile, 800, 0.65);
         toast.dismiss("bank-upload");
       }
 
@@ -1988,7 +2035,7 @@ export default function PaymentsRedesignPage() {
       const finalRepMobile = returnAgentMobile.trim() || (isPendingSource ? selectedPendingReturn.agentMobile : "") || "";
       const finalReturnReason = returnReason.trim() || (isPendingSource ? selectedPendingReturn.reason : "") || "خصم مرتجع بضاعة من سداد المورد";
 
-      const finalReturnItems = (returnItems && returnItems.length > 0)
+      const finalReturnItems = ((returnItems && returnItems.length > 0)
         ? returnItems
         : (isPendingSource && selectedPendingReturn.items && selectedPendingReturn.items.length > 0)
           ? selectedPendingReturn.items
@@ -1998,10 +2045,18 @@ export default function PaymentsRedesignPage() {
               quantity: 1,
               unitPrice: numReturnAmount,
               totalPrice: numReturnAmount
-            }];
+            }]).map((it, idx) => ({
+              barcode: it.barcode || "N/A",
+              itemName: it.itemName || (finalReturnReason || `صنف مرتجع ${idx + 1}`),
+              quantity: Number(it.quantity) || 1,
+              unitPrice: Number(it.unitPrice) || 0,
+              totalPrice: Number(it.totalPrice) || 0
+            }));
 
       let createdReturnId = null;
       const voucherRef = invoiceNumber ? `INV-${invoiceNumber}` : (finalPoNumber ? `PO-${finalPoNumber}` : `PAY-${Date.now().toString().slice(-6)}`);
+
+      const canonicalStoreId = (currentBranch === "ola" ? "ola-el-koronfol" : "eL-alamein-4");
 
       if (hasReturn && numReturnAmount > 0) {
         if (isPendingSource) {
@@ -2009,7 +2064,7 @@ export default function PaymentsRedesignPage() {
           const settleTimestamp = new Date().toISOString();
           for (const docId of selectedPendingReturn.allDocIds) {
             try {
-              await updateDoc(doc(db, "supplier_returns", docId), {
+              await updateDoc(doc(db, "supplier_returns", docId), cleanPayload({
                 status: "returned",
                 isSettled: true,
                 settledAt: settleTimestamp,
@@ -2019,11 +2074,11 @@ export default function PaymentsRedesignPage() {
                 settlementMethod: "money",
                 deductedFromPaymentDate: date,
                 returnAmount: numReturnAmount,
-                transferOutNumber: returnTransferOutNumber.trim() || selectedPendingReturn.transferOutNumber,
+                transferOutNumber: finalTransferOutNum || selectedPendingReturn.transferOutNumber || "",
                 agentName: finalRepName,
                 agentNationalId: finalRepNationalId,
                 agentMobile: finalRepMobile
-              });
+              }));
             } catch (updErr) {
               console.warn(`Failed to update return doc ${docId}:`, updErr);
             }
@@ -2032,20 +2087,20 @@ export default function PaymentsRedesignPage() {
         } else {
           // Create a new settled return in supplier_returns
           const returnTimestamp = new Date().toISOString();
-          const returnDocRef = await addDoc(collection(db, "supplier_returns"), {
+          const returnDocRef = await addDoc(collection(db, "supplier_returns"), cleanPayload({
             barcode: finalReturnItems[0]?.barcode || "N/A",
             itemName: finalReturnItems[0]?.itemName || finalReturnReason,
             category: "deduction_from_payment",
-            supplier: companyName,
+            supplier: companyName || "مورد",
             quantity: finalReturnItems.reduce((acc, it) => acc + (Number(it.quantity) || 0), 0) || 1,
-            storeId: branchIds.length > 0 ? branchIds[0] : (currentBranch === "ola" ? "ola-el-koronfol" : "eL-alamein-4"),
+            storeId: canonicalStoreId,
             branchId: currentBranch === "all" ? "alamein4" : currentBranch,
             status: "returned",
             createdAt: returnTimestamp,
             createdBy: currentUser?.email || "unknown",
             returnedAt: returnTimestamp,
             returnNumber: finalReturnNumber,
-            transferOutNumber: returnTransferOutNumber.trim(),
+            transferOutNumber: finalTransferOutNum,
             agentName: finalRepName,
             agentNationalId: finalRepNationalId,
             agentMobile: finalRepMobile,
@@ -2057,17 +2112,17 @@ export default function PaymentsRedesignPage() {
             isSettled: true,
             paymentVoucherNumber: voucherRef,
             deductedFromPaymentDate: date
-          });
+          }));
           createdReturnId = returnDocRef.id;
         }
       }
 
       const returnDetailsPayload = (hasReturn && numReturnAmount > 0) ? {
-        returnNumber: finalReturnNumber,
-        returnId: createdReturnId,
-        allDocIds: isPendingSource ? selectedPendingReturn.allDocIds : [createdReturnId],
+        returnNumber: finalReturnNumber || `RTV-${Date.now().toString().slice(-6)}`,
+        returnId: createdReturnId || "",
+        allDocIds: (isPendingSource && selectedPendingReturn?.allDocIds ? selectedPendingReturn.allDocIds : [createdReturnId]).filter(Boolean),
         sourceType: isPendingSource ? "pending_settled" : "newly_created",
-        transferOutNumber: returnTransferOutNumber.trim() || (isPendingSource ? selectedPendingReturn.transferOutNumber : ""),
+        transferOutNumber: finalTransferOutNum,
         returnAmount: numReturnAmount,
         agentName: finalRepName,
         agentNationalId: finalRepNationalId,
@@ -2078,7 +2133,7 @@ export default function PaymentsRedesignPage() {
         settlementMethod: "money",
         paymentTiming: "now",
         paymentVoucherNumber: voucherRef,
-        returnedAt: (isPendingSource && selectedPendingReturn.returnedAt) ? selectedPendingReturn.returnedAt : new Date().toISOString()
+        returnedAt: (isPendingSource && selectedPendingReturn?.returnedAt) ? selectedPendingReturn.returnedAt : new Date().toISOString()
       } : null;
 
       const newPayment = {
@@ -2094,7 +2149,7 @@ export default function PaymentsRedesignPage() {
         isTaxable: numTax > 0,
         method,
         poNumber: finalPoNumber,
-        storeId: branchIds.length > 0 ? branchIds[0] : "eL-alamein-4",
+        storeId: canonicalStoreId,
         tax: numTax,
         total: hasReturn ? netTotal : grossTotal,
         supplierRepName,
@@ -2105,14 +2160,42 @@ export default function PaymentsRedesignPage() {
         grossTotal: grossTotal,
         returnDeductionAmount: hasReturn ? numReturnAmount : 0,
         returnNumber: finalReturnNumber || "",
-        transferOutNumber: returnTransferOutNumber.trim() || "",
+        transferOutNumber: finalTransferOutNum,
         returnDetails: returnDetailsPayload,
         ...(finalPoItems.length > 0 ? { items: finalPoItems } : {}),
         ...(finalPoImageUrl ? { poImageUrl: finalPoImageUrl } : {}),
         ...(bankTransferReceiptUrl ? { bankTransferReceiptUrl } : {})
       };
 
-      const docRef = await addDoc(collection(db, "cash_payments"), newPayment);
+      const cleanedPayment = cleanPayload(newPayment);
+      let docRef;
+      try {
+        docRef = await addDoc(collection(db, "cash_payments"), cleanedPayment);
+      } catch (addErr) {
+        console.warn("Primary cash_payments addDoc failed, retrying lightweight:", addErr);
+        const lightweight = { ...cleanedPayment };
+        delete lightweight.poImageUrl;
+        delete lightweight.bankTransferReceiptUrl;
+        docRef = await addDoc(collection(db, "cash_payments"), cleanPayload(lightweight));
+      }
+
+      // Prepend to local cache so it appears immediately
+      if (typeof window !== "undefined" && docRef?.id) {
+        try {
+          const rawCache = localStorage.getItem('cached_detailed_payments');
+          const cachedList = rawCache ? JSON.parse(rawCache) : [];
+          const newPaymentForCache = {
+            ...cleanedPayment,
+            id: docRef.id,
+            createdAt: new Date().toISOString(),
+          };
+          const updatedCache = [newPaymentForCache, ...cachedList.filter((p: any) => p.id !== docRef.id)].slice(0, 100);
+          localStorage.setItem('cached_detailed_payments', JSON.stringify(updatedCache));
+        } catch (cacheErr) {
+          console.warn("Could not cache new payment locally:", cacheErr);
+        }
+      }
+
       notifyFinancialsUpdated(currentBranch);
 
       // Dispatch Universal System Notification
@@ -2142,6 +2225,33 @@ export default function PaymentsRedesignPage() {
       // Sync products to secondary Firebase
       if (poItems.length > 0) {
         syncProductsToMaster(poItems, date, companyName);
+      }
+
+      // Sync matching credit in credits collection if invoiceNumber or credit category exists
+      if (invoiceNumber && (category === "credit" || category === "order")) {
+        try {
+          const credQuery = query(
+            collection(db, "credits"),
+            where("invoiceNumber", "==", invoiceNumber.trim()),
+            limit(1)
+          );
+          const credSnap = await getDocs(credQuery);
+          if (!credSnap.empty) {
+            const cDoc = credSnap.docs[0];
+            const cData = cDoc.data();
+            const curPaid = Number(cData.paidAmount) || 0;
+            const newPaid = curPaid + grossTotal;
+            const totDue = (Number(cData.amountDue) || 0) + (Number(cData.tax) || 0);
+            const newSt = newPaid >= totDue ? "paid" : (newPaid > 0 ? "partial" : cData.status);
+            await updateDoc(doc(db, "credits", cDoc.id), {
+              paidAmount: newPaid,
+              status: newSt,
+              updatedAt: serverTimestamp()
+            });
+          }
+        } catch (cErr) {
+          console.warn("Could not sync credit from payments:", cErr);
+        }
       }
 
       toast.success(hasReturn ? (isAr ? "تم حفظ السداد وتسوية المرتجع وطباعة الإيصالات!" : "Payment & Return settled successfully!") : "Payment saved & notification sent!");
@@ -3456,6 +3566,31 @@ html, body {
           </div>
         </div>
 
+        {/* Highlight notification banner if navigated from credit payment settlement */}
+        {highlightPaymentId && (
+          <div className="flex items-center justify-between p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 animate-in fade-in slide-in-from-top-2 duration-300">
+            <div className="flex items-center gap-3">
+              <span className="w-8 h-8 rounded-xl bg-amber-500/20 flex items-center justify-center text-amber-400 font-black">
+                ✨
+              </span>
+              <div>
+                <h4 className="text-xs font-black text-white">
+                  {isAr ? "تم تسجيل سداد الدين وخصم المرتجع بنجاح!" : "Credit Payment & Return Settled Successfully!"}
+                </h4>
+                <p className="text-[11px] text-amber-200/80">
+                  {isAr ? "تم إدراج الدفعة المحدثة في الدفاتر وسجل المدفوعات أدناه وتم تمييزها." : "The updated voucher has been reconciled into the ledger below."}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setHighlightPaymentId(null)}
+              className="px-3 py-1 text-xs font-black rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-200"
+            >
+              {isAr ? "إغلاق" : "Dismiss"}
+            </button>
+          </div>
+        )}
+
         {/* Data List for Mobile Portrait, Landscape & Desktop */}
         <div className="space-y-3 sm:space-y-4">
           {viewMode === "ledger" ? (
@@ -3487,7 +3622,9 @@ html, body {
                       <tr
                         key={pay.id}
                         onClick={() => handleSelectBulkItem(pay.id)}
-                        className={`hover:bg-white/[0.03] transition-colors cursor-pointer group ${isSelected ? "bg-rose-500/[0.06]" : ""}`}
+                        className={`hover:bg-white/[0.03] transition-colors cursor-pointer group ${
+                          highlightPaymentId === pay.id ? "bg-amber-500/[0.15] ring-2 ring-amber-400" : (isSelected ? "bg-rose-500/[0.06]" : "")
+                        }`}
                       >
                         <td className="p-3.5 text-center" onClick={(e) => e.stopPropagation()}>
                           <input
@@ -3637,6 +3774,7 @@ html, body {
                     transition={{ duration: 0.2, delay: idx * 0.03 }}
                     key={pay.id}
                     className={`bg-[#111116] hover:bg-[#16161d] border rounded-2xl shadow-xl hover:border-rose-500/40 transition-all overflow-hidden group ${
+                      highlightPaymentId === pay.id ? 'border-amber-400 ring-2 ring-amber-400/80 shadow-amber-500/20 bg-amber-500/[0.05]' :
                       selectedBulkItems.has(pay.id) ? 'border-rose-500/60 ring-1 ring-rose-500/40' : 'border-white/[0.08]'
                     }`}
                   >
@@ -4088,6 +4226,9 @@ html, body {
                           type="button"
                           onClick={() => {
                             setHasReturn(true);
+                            if (!returnTransferOutNumber) {
+                              setReturnTransferOutNumber(`TR-${Date.now().toString().slice(-6)}`);
+                            }
                             if (!returnAgentName && supplierRepName) setReturnAgentName(supplierRepName);
                             if (!returnAgentNationalId && supplierNationalId) setReturnAgentNationalId(supplierNationalId);
                           }}
@@ -4373,18 +4514,17 @@ html, body {
                             {/* Question 2: TR Number */}
                             <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-amber-300 dark:border-amber-700/60 shadow-xs">
                               <label className="block text-xs font-black text-slate-700 dark:text-slate-200 uppercase tracking-wider mb-1.5">
-                                {isAr ? "٢. رقم إذن خروج البضاعة (TR Number) *" : "2. Outbound Transfer # (TR) *"}
+                                {isAr ? "٢. رقم إذن خروج البضاعة (TR Number)" : "2. Outbound Transfer # (TR)"}
                               </label>
                               <input
                                 type="text"
-                                required={hasReturn}
-                                placeholder={isAr ? "مثال: TR-94821 أو رقم إذن الصرف" : "e.g. TR-94821"}
+                                placeholder={isAr ? "مثال: TR-94821 (تلقائي إن تُرك فارغاً)" : "e.g. TR-94821 (Auto-generated if blank)"}
                                 value={returnTransferOutNumber}
                                 onChange={(e) => setReturnTransferOutNumber(e.target.value)}
                                 className="w-full p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 focus:ring-2 focus:ring-amber-500 outline-none font-bold text-slate-900 dark:text-white text-sm"
                               />
                               <span className="text-[11px] text-slate-400 mt-1 block">
-                                {isAr ? "الرقم الدفتري أو الإلكتروني لإذن الخروج" : "Official outbound transfer manifest #"}
+                                {isAr ? "الرقم الدفتري أو الإلكتروني لإذن الخروج (يتم إنشاؤه تلقائياً)" : "Official outbound transfer manifest # (Auto-assigned)"}
                               </span>
                             </div>
 

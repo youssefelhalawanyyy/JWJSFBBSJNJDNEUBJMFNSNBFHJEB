@@ -92,6 +92,7 @@ import { CSS } from '@dnd-kit/utilities';
 import QRCode from "react-qr-code";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, AreaChart, Area, ComposedChart, Line, Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Cell } from "recharts";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import jsPDF from "jspdf";
 import html2canvas from "html2canvas";
 import dynamic from "next/dynamic";
@@ -103,7 +104,27 @@ import { PosReceiptPrinter } from "@/components/SkeuomorphicUX/PosReceiptPrinter
 import { RubberStamp } from "@/components/SkeuomorphicUX/RubberStamp";
 import { ReturnReceiptContent, numberToArabicWords, PendingReturnTicket, groupPendingReturns } from "@/components/ReturnReceiptContent";
 
-const compressImage = (file: File, maxWidth: number = 1200, quality: number = 0.75): Promise<string> => {
+function cleanPayload<T = any>(obj: any): T {
+  if (obj === null || obj === undefined) return null as any;
+  if (typeof obj !== "object") {
+    if (typeof obj === "number" && isNaN(obj)) return 0 as any;
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj
+      .filter((item) => item !== undefined)
+      .map((item) => cleanPayload(item)) as any;
+  }
+  const cleaned: Record<string, any> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      cleaned[key] = cleanPayload(value);
+    }
+  }
+  return cleaned as any;
+}
+
+const compressImage = (file: File, maxWidth: number = 800, quality: number = 0.65): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.readAsDataURL(file);
@@ -246,21 +267,21 @@ function DroppableColumn({ id, title, credits, onSelect }: { id: string, title: 
 }
 
 export default function CreditsPage() {
+  const router = useRouter();
   const { currentBranch } = useBranch();
   const { language } = useLanguage();
   const isAr = language === "ar";
   const branchIds = useMemo(() => {
-    const ids = [];
-    if (currentBranch === "all") {
-      // no filter
-    } else if (currentBranch === "alamein4") {
-      ids.push("eL-alamein-4");
-    } else if (currentBranch === "ola") {
-      ids.push("ola-el-koronfol");
+    const b = currentBranch as string;
+    if (b === "all") {
+      return [];
+    } else if (b === "alamein4" || b === "el-alamein-4") {
+      return ["eL-alamein-4", "alamein4", "el-alamein-4", "alamein", "alamein-4"];
+    } else if (b === "ola" || b === "ola-el-koronfol") {
+      return ["ola-el-koronfol", "ola", "ola_el_koronfol", "el-koronfol"];
     } else {
-      ids.push(currentBranch);
+      return [b];
     }
-    return ids;
   }, [currentBranch]);
   
   const [currentUser, setCurrentUser] = useState<any>(null);
@@ -1705,11 +1726,10 @@ export default function CreditsPage() {
         toast.error(isAr ? "قيمة خصم المرتجع لا يمكن أن تتجاوز إجمالي المبلغ المسدد." : "Return deduction cannot exceed gross settlement amount.");
         return;
       }
-      if (!returnTransferOutNumber.trim()) {
-        toast.error(isAr ? "برجاء إدخال رقم إذن خروج البضاعة (TR Number)." : "Please enter the Outbound Transfer # (TR).");
-        return;
-      }
     }
+
+    // Auto-generate fallback TR Number if not provided
+    const finalTransferOutNum = returnTransferOutNumber.trim() || (hasReturn ? `TR-${Date.now().toString().slice(-6)}` : "");
 
     // Net cash disbursed from safe (after deducting goods return RTV)
     const netCashDisbursed = Math.max(0, grossSettled - numReturnAmount);
@@ -1734,15 +1754,18 @@ export default function CreditsPage() {
       let bankTransferReceiptUrl = null;
       if (paymentMethod === 'bank_transfer' && bankTransferFile) {
         try {
-          bankTransferReceiptUrl = await compressImage(bankTransferFile, 800, 0.6);
+          bankTransferReceiptUrl = await compressImage(bankTransferFile, 800, 0.65);
         } catch (imgErr) {
           console.warn("Failed to compress bank transfer receipt, continuing without image:", imgErr);
         }
       }
 
-      // Step B: Determine normalized storeId
-      const targetStoreId = selectedCreditForPayment.storeId || 
+      // Step B: Determine canonical storeId
+      const rawStoreId = selectedCreditForPayment.storeId || 
         (branchIds.length > 0 && branchIds[0] !== "all" ? branchIds[0] : "eL-alamein-4");
+      const targetStoreId = (rawStoreId.toLowerCase().includes("ola") || currentBranch === "ola")
+        ? "ola-el-koronfol"
+        : "eL-alamein-4";
 
       const userEmail = currentUser?.email || 
         (typeof window !== "undefined" ? localStorage.getItem("circlek_email") || localStorage.getItem("circlek_role") : null) || 
@@ -1759,7 +1782,7 @@ export default function CreditsPage() {
       const finalRepMobile = returnAgentMobile.trim() || (isPendingSource ? selectedPendingReturn.agentMobile : "") || "";
       const finalReturnReason = returnReason.trim() || (isPendingSource ? selectedPendingReturn.reason : "") || "خصم مرتجع بضاعة من سداد المديونية الآجلة";
 
-      const finalReturnItems = (returnItems && returnItems.length > 0)
+      const finalReturnItems = ((returnItems && returnItems.length > 0)
         ? returnItems
         : (isPendingSource && selectedPendingReturn.items && selectedPendingReturn.items.length > 0)
           ? selectedPendingReturn.items
@@ -1769,7 +1792,13 @@ export default function CreditsPage() {
               quantity: 1,
               unitPrice: numReturnAmount,
               totalPrice: numReturnAmount
-            }];
+            }]).map((it, idx) => ({
+              barcode: it.barcode || "N/A",
+              itemName: it.itemName || (finalReturnReason || `صنف مرتجع ${idx + 1}`),
+              quantity: Number(it.quantity) || 1,
+              unitPrice: Number(it.unitPrice) || 0,
+              totalPrice: Number(it.totalPrice) || 0
+            }));
 
       let createdReturnId = null;
       const voucherRef = selectedCreditForPayment.invoiceNumber ? `INV-${selectedCreditForPayment.invoiceNumber}` : `CREDIT-${selectedCreditForPayment.id.slice(-6)}`;
@@ -1780,7 +1809,7 @@ export default function CreditsPage() {
           const settleTimestamp = new Date().toISOString();
           for (const docId of selectedPendingReturn.allDocIds) {
             try {
-              await updateDoc(doc(db, "supplier_returns", docId), {
+              await updateDoc(doc(db, "supplier_returns", docId), cleanPayload({
                 status: "returned",
                 isSettled: true,
                 settledAt: settleTimestamp,
@@ -1790,12 +1819,12 @@ export default function CreditsPage() {
                 settlementMethod: "money",
                 deductedFromPaymentDate: paymentDate || new Date().toISOString().split("T")[0],
                 returnAmount: numReturnAmount,
-                transferOutNumber: returnTransferOutNumber.trim() || selectedPendingReturn.transferOutNumber,
+                transferOutNumber: finalTransferOutNum || selectedPendingReturn.transferOutNumber || "",
                 agentName: finalRepName,
                 agentNationalId: finalRepNationalId,
                 agentMobile: finalRepMobile,
                 creditId: selectedCreditForPayment.id
-              });
+              }));
             } catch (updErr) {
               console.warn(`Failed to update return doc ${docId}:`, updErr);
             }
@@ -1804,11 +1833,11 @@ export default function CreditsPage() {
         } else {
           // Create new settled return record in supplier_returns
           const returnTimestamp = new Date().toISOString();
-          const returnDocRef = await addDoc(collection(db, "supplier_returns"), {
+          const returnDocRef = await addDoc(collection(db, "supplier_returns"), cleanPayload({
             barcode: finalReturnItems[0]?.barcode || "N/A",
             itemName: finalReturnItems[0]?.itemName || finalReturnReason,
             category: "deduction_from_payment",
-            supplier: selectedCreditForPayment.companyName,
+            supplier: selectedCreditForPayment.companyName || "مورد",
             quantity: finalReturnItems.reduce((acc, it) => acc + (Number(it.quantity) || 0), 0) || 1,
             storeId: targetStoreId,
             branchId: currentBranch === "all" ? (targetStoreId.includes("ola") ? "ola" : "alamein4") : currentBranch,
@@ -1817,7 +1846,7 @@ export default function CreditsPage() {
             createdBy: userEmail,
             returnedAt: returnTimestamp,
             returnNumber: finalReturnNumber,
-            transferOutNumber: returnTransferOutNumber.trim(),
+            transferOutNumber: finalTransferOutNum,
             agentName: finalRepName,
             agentNationalId: finalRepNationalId,
             agentMobile: finalRepMobile,
@@ -1830,24 +1859,24 @@ export default function CreditsPage() {
             paymentVoucherNumber: voucherRef,
             creditId: selectedCreditForPayment.id,
             deductedFromPaymentDate: paymentDate || new Date().toISOString().split("T")[0]
-          });
+          }));
           createdReturnId = returnDocRef.id;
         }
       }
 
       const returnDetailsPayload = (hasReturn && numReturnAmount > 0) ? {
-        returnNumber: finalReturnNumber,
-        returnId: createdReturnId,
-        allDocIds: isPendingSource ? selectedPendingReturn.allDocIds : [createdReturnId],
+        returnNumber: finalReturnNumber || `RTV-${Date.now().toString().slice(-6)}`,
+        returnId: createdReturnId || "",
+        allDocIds: (isPendingSource && selectedPendingReturn?.allDocIds ? selectedPendingReturn.allDocIds : [createdReturnId]).filter(Boolean),
         sourceType: isPendingSource ? "pending_settled" : "newly_created",
-        transferOutNumber: returnTransferOutNumber.trim() || (isPendingSource ? selectedPendingReturn.transferOutNumber : ""),
+        transferOutNumber: finalTransferOutNum,
         returnAmount: numReturnAmount,
         agentName: finalRepName,
         agentNationalId: finalRepNationalId,
         agentMobile: finalRepMobile,
         reason: finalReturnReason,
         items: finalReturnItems,
-        returnedAt: (isPendingSource && selectedPendingReturn.returnedAt) ? selectedPendingReturn.returnedAt : new Date().toISOString(),
+        returnedAt: (isPendingSource && selectedPendingReturn?.returnedAt) ? selectedPendingReturn.returnedAt : new Date().toISOString(),
         isSettled: true,
         settlementMethod: "money",
         paymentTiming: "now",
@@ -1855,22 +1884,20 @@ export default function CreditsPage() {
       } : null;
 
       const finalPoNumber = paymentPoNumber.trim() || selectedCreditForPayment.poNumber || "";
-      const finalItems = (paymentPoItems && paymentPoItems.length > 0)
+      const finalItems = ((paymentPoItems && paymentPoItems.length > 0)
         ? paymentPoItems
         : ((selectedCreditForPayment.items && selectedCreditForPayment.items.length > 0)
             ? selectedCreditForPayment.items
-            : (creditPOItems[selectedCreditForPayment.id] || []));
+            : (creditPOItems[selectedCreditForPayment.id] || []))).map((it: any) => ({
+          barcode: it.barcode || "N/A",
+          name: it.name || it.itemName || "صنف",
+          quantity: Number(it.quantity) || 1,
+          price: Number(it.price || it.unitPrice) || 0,
+          total: Number(it.total || it.totalPrice) || 0
+        }));
 
       const finalPoImageUrl = paymentPoImageUrl || selectedCreditForPayment.poImageUrl || selectedCreditForPayment.poUrl || (selectedCreditForPayment.poUrls && selectedCreditForPayment.poUrls[0]) || "";
-
-      const finalInvoiceUrls = (selectedCreditForPayment.invoiceUrls && selectedCreditForPayment.invoiceUrls.length > 0)
-        ? selectedCreditForPayment.invoiceUrls
-        : (selectedCreditForPayment.invoiceUrl ? [selectedCreditForPayment.invoiceUrl] : (finalPoImageUrl ? [finalPoImageUrl] : []));
-
-      const finalInvoiceUrl = selectedCreditForPayment.invoiceUrl || (finalInvoiceUrls.length > 0 ? finalInvoiceUrls[0] : "");
-      const finalPoUrls = (selectedCreditForPayment.poUrls && selectedCreditForPayment.poUrls.length > 0)
-        ? selectedCreditForPayment.poUrls
-        : (finalPoImageUrl ? [finalPoImageUrl] : []);
+      const finalInvoiceUrl = selectedCreditForPayment.invoiceUrl || (selectedCreditForPayment.invoiceUrls && selectedCreditForPayment.invoiceUrls.length > 0 ? selectedCreditForPayment.invoiceUrls[0] : "");
 
       // Step D: Update Credit Document in Firestore
       const creditUpdatePayload: any = {
@@ -1887,7 +1914,7 @@ export default function CreditsPage() {
       if (finalPoImageUrl && !selectedCreditForPayment.poImageUrl) {
         creditUpdatePayload.poImageUrl = finalPoImageUrl;
       }
-      await updateDoc(doc(db, "credits", selectedCreditForPayment.id), creditUpdatePayload);
+      await updateDoc(doc(db, "credits", selectedCreditForPayment.id), cleanPayload(creditUpdatePayload));
 
       // Optimistically update local credit state immediately
       setCredits(prev => prev.map(c => c.id === selectedCreditForPayment.id ? { 
@@ -1906,66 +1933,91 @@ export default function CreditsPage() {
       // Step E: Write cash_payments (single source of truth for payments ledger)
       // Safe accounting: Safe balance outflow is payment.amount, so we store netCashDisbursed
       let createdCashPaymentId = "";
-      try {
-        const paymentRecord: any = {
-          amount: netCashDisbursed,
-          grossAmount: grossSettled,
-          grossTotal: grossSettled,
-          hasReturn: hasReturn && numReturnAmount > 0,
-          returnDeductionAmount: hasReturn ? numReturnAmount : 0,
-          returnNumber: finalReturnNumber || "",
-          returnTransferOutNumber: returnTransferOutNumber.trim() || (isPendingSource ? selectedPendingReturn.transferOutNumber : "") || "",
-          returnDetails: returnDetailsPayload,
-          category: "order",
-          subCategory: "credit_payment",
-          categoryNote: `Credit Payment - Inv #${selectedCreditForPayment.invoiceNumber || ""} - ${selectedCreditForPayment.companyName || ""}${finalPoNumber ? ` • PO #${finalPoNumber}` : ''}${hasReturn ? ` (RTV: EGP ${numReturnAmount})` : ''}`,
-          companyName: selectedCreditForPayment.companyName || "Unknown",
-          createdAt: serverTimestamp(),
-          createdBy: userEmail,
-          date: paymentDate || new Date().toISOString().split("T")[0],
-          description: hasReturn ? `Credit Payment & RTV Settled` : `Credit Payment`,
-          invoiceNumber: selectedCreditForPayment.invoiceNumber || "",
-          isTaxable: Number(selectedCreditForPayment.tax) > 0,
-          method: paymentMethod,
-          poNumber: finalPoNumber,
-          poImageUrl: finalPoImageUrl,
-          poUrl: finalPoImageUrl,
-          poUrls: finalPoUrls,
-          invoiceUrl: finalInvoiceUrl,
-          invoiceUrls: finalInvoiceUrls,
-          managerSignature: selectedCreditForPayment.managerSignature || "",
-          supplierRepName: finalRepName,
-          supplierNationalId: finalRepNationalId,
-          items: finalItems,
-          storeId: targetStoreId,
-          tax: 0,
-          total: netCashDisbursed,
-          creditId: selectedCreditForPayment.id,
-        };
-        if (bankTransferReceiptUrl) {
-          paymentRecord.bankTransferReceiptUrl = bankTransferReceiptUrl;
-        }
-        const cashDocRef = await addDoc(collection(db, "cash_payments"), paymentRecord);
-        createdCashPaymentId = cashDocRef.id;
-
-        // Auto sync products to master DB if items present
-        if (finalItems && finalItems.length > 0) {
-          syncProductsToMaster(finalItems, paymentDate || new Date().toISOString().split("T")[0], selectedCreditForPayment.companyName).catch(() => {});
-        }
-
-        // Notify financials sync across all views
-        notifyFinancialsUpdated(targetStoreId);
-
-        // Auto open print dialog immediately for the dual-sheet voucher
-        const createdPaymentForPrint = {
-          ...paymentRecord,
-          id: createdCashPaymentId,
-          date: paymentDate || new Date().toISOString().split("T")[0],
-        };
-        handlePrintPaymentReceipt(selectedCreditForPayment, createdPaymentForPrint);
-      } catch (cashErr) {
-        console.warn("Could not write cash_payment log:", cashErr);
+      const paymentRecord: any = {
+        amount: netCashDisbursed,
+        grossAmount: grossSettled,
+        grossTotal: grossSettled,
+        hasReturn: hasReturn && numReturnAmount > 0,
+        returnDeductionAmount: hasReturn ? numReturnAmount : 0,
+        returnNumber: finalReturnNumber || "",
+        returnTransferOutNumber: finalTransferOutNum,
+        returnDetails: returnDetailsPayload,
+        category: "order",
+        subCategory: "credit_payment",
+        categoryNote: `Credit Payment - Inv #${selectedCreditForPayment.invoiceNumber || ""} - ${selectedCreditForPayment.companyName || ""}${finalPoNumber ? ` • PO #${finalPoNumber}` : ''}${hasReturn ? ` (RTV: EGP ${numReturnAmount})` : ''}`,
+        companyName: selectedCreditForPayment.companyName || "Unknown",
+        createdAt: serverTimestamp(),
+        createdBy: userEmail,
+        date: paymentDate || new Date().toISOString().split("T")[0],
+        description: hasReturn ? `Credit Payment & RTV Settled` : `Credit Payment`,
+        invoiceNumber: selectedCreditForPayment.invoiceNumber || "",
+        isTaxable: Number(selectedCreditForPayment.tax) > 0,
+        method: paymentMethod,
+        poNumber: finalPoNumber,
+        poImageUrl: finalPoImageUrl || "",
+        invoiceUrl: finalInvoiceUrl || "",
+        managerSignature: selectedCreditForPayment.managerSignature || "",
+        supplierRepName: finalRepName,
+        supplierNationalId: finalRepNationalId,
+        items: finalItems,
+        storeId: targetStoreId,
+        tax: 0,
+        total: netCashDisbursed,
+        creditId: selectedCreditForPayment.id,
+      };
+      if (bankTransferReceiptUrl) {
+        paymentRecord.bankTransferReceiptUrl = bankTransferReceiptUrl;
       }
+
+      const cleanedPaymentRecord = cleanPayload(paymentRecord);
+      try {
+        const cashDocRef = await addDoc(collection(db, "cash_payments"), cleanedPaymentRecord);
+        createdCashPaymentId = cashDocRef.id;
+      } catch (firstCashErr) {
+        console.warn("Primary cash_payments addDoc failed, retrying with lightweight payload:", firstCashErr);
+        // Retry with lightweight payload stripping large image blobs
+        const lightweight = { ...cleanedPaymentRecord };
+        delete lightweight.poImageUrl;
+        delete lightweight.invoiceUrl;
+        delete lightweight.invoiceUrls;
+        delete lightweight.poUrls;
+        delete lightweight.bankTransferReceiptUrl;
+        const cashDocRef = await addDoc(collection(db, "cash_payments"), cleanPayload(lightweight));
+        createdCashPaymentId = cashDocRef.id;
+      }
+
+      // Prepend new payment to local cache so it appears immediately upon navigation
+      if (typeof window !== "undefined" && createdCashPaymentId) {
+        try {
+          const rawCache = localStorage.getItem('cached_detailed_payments');
+          const cachedList = rawCache ? JSON.parse(rawCache) : [];
+          const newPaymentForCache = {
+            ...cleanedPaymentRecord,
+            id: createdCashPaymentId,
+            createdAt: new Date().toISOString(),
+          };
+          const updatedCache = [newPaymentForCache, ...cachedList.filter((p: any) => p.id !== createdCashPaymentId)].slice(0, 100);
+          localStorage.setItem('cached_detailed_payments', JSON.stringify(updatedCache));
+        } catch (cacheErr) {
+          console.warn("Could not cache new payment locally:", cacheErr);
+        }
+      }
+
+      // Auto sync products to master DB if items present
+      if (finalItems && finalItems.length > 0) {
+        syncProductsToMaster(finalItems, paymentDate || new Date().toISOString().split("T")[0], selectedCreditForPayment.companyName).catch(() => {});
+      }
+
+      // Notify financials sync across all views and tabs
+      notifyFinancialsUpdated(targetStoreId);
+
+      // Auto open print dialog immediately for the dual-sheet voucher
+      const createdPaymentForPrint = {
+        ...cleanedPaymentRecord,
+        id: createdCashPaymentId,
+        date: paymentDate || new Date().toISOString().split("T")[0],
+      };
+      handlePrintPaymentReceipt(selectedCreditForPayment, createdPaymentForPrint);
 
       // Trigger Skeuomorphic effects
       setIsCoinDropping(true);
@@ -1975,14 +2027,14 @@ export default function CreditsPage() {
         setTimeout(() => setIsReceiptPrinting(false), 3000);
       }, 1500);
 
-      // Dismiss loading toast and show success
+      // Dismiss loading toast and show professional success with redirect info
       toast.success(
         hasReturn
-          ? (isAr ? "تم تسجيل سداد الدين وخصم المرتجع وطباعة الإيصالات بنجاح!" : "Payment & Return settled successfully!")
+          ? (isAr ? "تم تسجيل سداد الدين وخصم المرتجع بنجاح! جاري الانتقال إلى المدفوعات..." : "Payment & Return settled successfully! Redirecting to payments...")
           : (newStatus === "paid" 
-              ? (isAr ? "تم سداد الدين بالكامل وتحديث الحالة إلى مدفوع!" : "Credit fully paid and status updated!") 
-              : (isAr ? "تم تسجيل الدفعة بنجاح!" : "Payment recorded successfully!")), 
-        { id: saveToastId }
+              ? (isAr ? "تم سداد الدين بالكامل! جاري الانتقال إلى المدفوعات..." : "Credit fully paid! Redirecting to payments...") 
+              : (isAr ? "تم تسجيل الدفعة بنجاح! جاري الانتقال إلى المدفوعات..." : "Payment recorded successfully! Redirecting to payments...")), 
+        { id: saveToastId, duration: 3000 }
       );
       
       setShowPaymentModal(false);
@@ -1990,6 +2042,12 @@ export default function CreditsPage() {
 
       // Step F: Refresh data in background without blocking or throwing
       fetchCredits().catch(e => console.warn("Background fetch credits failed:", e));
+
+      // Step G: Smooth, professional auto-navigation to the Payments tab
+      const targetMonth = (paymentDate || new Date().toISOString().split("T")[0]).slice(0, 7);
+      setTimeout(() => {
+        router.push(`/financials/inputs/payments?month=${targetMonth}&highlight=${createdCashPaymentId}`);
+      }, 700);
 
       // Refresh history if expanded
       if (expandedCredits[selectedCreditForPayment.id]) {
@@ -3805,6 +3863,9 @@ html, body {
                             type="button"
                             onClick={() => {
                               setHasReturn(true);
+                              if (!returnTransferOutNumber) {
+                                setReturnTransferOutNumber(`TR-${Date.now().toString().slice(-6)}`);
+                              }
                               if (!returnAgentName && selectedCreditForPayment.supplierRepName) setReturnAgentName(selectedCreditForPayment.supplierRepName);
                               if (!returnAgentNationalId && selectedCreditForPayment.supplierNationalId) setReturnAgentNationalId(selectedCreditForPayment.supplierNationalId);
                             }}
@@ -4090,18 +4151,17 @@ html, body {
                               {/* Question 2: TR Number */}
                               <div className="bg-[#0B1121] p-4 rounded-xl border border-amber-400/40 shadow-xs">
                                 <label className="block text-xs font-black text-slate-200 uppercase tracking-wider mb-1.5">
-                                  {isAr ? "٢. رقم إذن خروج البضاعة (TR Number) *" : "2. Outbound Transfer # (TR) *"}
+                                  {isAr ? "٢. رقم إذن خروج البضاعة (TR Number)" : "2. Outbound Transfer # (TR)"}
                                 </label>
                                 <input
                                   type="text"
-                                  required={hasReturn}
-                                  placeholder={isAr ? "مثال: TR-94821 أو رقم إذن الصرف" : "e.g. TR-94821"}
+                                  placeholder={isAr ? "مثال: TR-94821 (تلقائي إن تُرك فارغاً)" : "e.g. TR-94821 (Auto-generated if blank)"}
                                   value={returnTransferOutNumber}
                                   onChange={(e) => setReturnTransferOutNumber(e.target.value)}
                                   className="w-full p-2.5 rounded-lg bg-slate-900 border border-slate-700 focus:ring-2 focus:ring-amber-500 outline-none font-bold text-white text-sm"
                                 />
                                 <span className="text-[11px] text-slate-400 mt-1 block">
-                                  {isAr ? "الرقم الدفتري أو الإلكتروني لإذن الخروج" : "Official outbound transfer manifest #"}
+                                  {isAr ? "الرقم الدفتري أو الإلكتروني لإذن الخروج (يتم إنشاؤه تلقائياً)" : "Official outbound transfer manifest # (Auto-assigned)"}
                                 </span>
                               </div>
 
