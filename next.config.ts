@@ -37,13 +37,26 @@ const nextConfig = {
       "jspdf",
       "jspdf-autotable",
       "papaparse",
-      "canvas-confetti"
+      "canvas-confetti",
+      "@tanstack/react-table",
+      "react-hot-toast",
+      "swr",
+      "idb",
+      "html5-qrcode",
+      "qrcode",
+      "react-qr-code",
+      "lottie-react",
+      "firebase/app",
+      "firebase/auth",
+      "firebase/firestore",
+      "firebase/storage",
+      "firebase/messaging"
     ],
   },
   async headers() {
     return [
       {
-        source: "/:all*(svg|jpg|png|webp|ico|woff|woff2|ttf|mp3)",
+        source: "/:all*(svg|jpg|png|webp|ico|woff|woff2|ttf|mp3|webmanifest)",
         headers: [
           {
             key: "Cache-Control",
@@ -57,6 +70,15 @@ const nextConfig = {
           {
             key: "Cache-Control",
             value: "public, max-age=31536000, immutable",
+          },
+        ],
+      },
+      {
+        source: "/_next/image/:path*",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=86400, stale-while-revalidate=604800",
           },
         ],
       },

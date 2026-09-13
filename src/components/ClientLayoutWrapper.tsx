@@ -54,6 +54,10 @@ export default function ClientLayoutWrapper({ children }: { children: React.Reac
   });
   const [userDoc, setUserDoc] = useState<any>(() => {
     if (typeof window !== "undefined") {
+      try {
+        const fullCached = localStorage.getItem("circlek_cached_user_doc");
+        if (fullCached) return JSON.parse(fullCached);
+      } catch (e) {}
       const cachedName = localStorage.getItem("circlek_user_name");
       const cachedRole = localStorage.getItem("circlek_role");
       if (cachedName || cachedRole) {
@@ -64,8 +68,7 @@ export default function ClientLayoutWrapper({ children }: { children: React.Reac
   });
   const [authLoading, setAuthLoading] = useState<boolean>(() => {
     if (typeof window !== "undefined") {
-      if (auth?.currentUser) return false;
-      if (localStorage.getItem("circlek_logged_in") === "true") return true;
+      if (auth?.currentUser || localStorage.getItem("circlek_logged_in") === "true") return false;
     }
     return true;
   });
@@ -188,9 +191,9 @@ export default function ClientLayoutWrapper({ children }: { children: React.Reac
 
   useEffect(() => {
     if (typeof window !== "undefined") {
-      // Clean up legacy stale service workers and corrupted caches
-      if (!sessionStorage.getItem("anh_sw_cleaned_v2")) {
-        sessionStorage.setItem("anh_sw_cleaned_v2", "true");
+      // Clean up legacy stale service workers and corrupted caches once
+      if (!localStorage.getItem("anh_sw_cleaned_v2")) {
+        localStorage.setItem("anh_sw_cleaned_v2", "true");
         if ("caches" in window) {
           caches.keys().then((names) => {
             names.forEach((name) => {
@@ -273,12 +276,16 @@ export default function ClientLayoutWrapper({ children }: { children: React.Reac
             };
 
             setUserDoc(normalizedUserDoc);
+            if (typeof window !== "undefined") {
+              localStorage.setItem("circlek_cached_user_doc", JSON.stringify(normalizedUserDoc));
+            }
 
             if (currentUser && mName && (!currentUser.displayName || currentUser.displayName !== mName)) {
               updateProfile(currentUser, { displayName: mName }).catch(console.warn);
             }
 
-            if (currentUser.uid) {
+            if (currentUser.uid && typeof window !== "undefined" && !sessionStorage.getItem(`user_doc_synced_${currentUser.uid}`)) {
+              sessionStorage.setItem(`user_doc_synced_${currentUser.uid}`, "true");
               setDoc(doc(db, "users", currentUser.uid), {
                 ...normalizedUserDoc,
                 updatedAt: new Date().toISOString()
@@ -1189,6 +1196,7 @@ export default function ClientLayoutWrapper({ children }: { children: React.Reac
       sessionStorage.removeItem("device_login_time");
       sessionStorage.removeItem("circlek_welcomed");
       localStorage.removeItem("circlek_logged_in");
+      localStorage.removeItem("circlek_cached_user_doc");
       localStorage.removeItem("circlek_user_email");
       localStorage.removeItem("circlek_user_name");
       localStorage.removeItem("circlek_role");
@@ -1215,7 +1223,9 @@ export default function ClientLayoutWrapper({ children }: { children: React.Reac
     );
   }
 
-  if (authLoading) {
+  const isLocallyAuthenticated = typeof window !== "undefined" && (Boolean(user) || Boolean(auth?.currentUser) || localStorage.getItem("circlek_logged_in") === "true");
+
+  if (authLoading && !isLocallyAuthenticated) {
     return (
       <div className="h-[100dvh] w-full flex flex-col items-center justify-center bg-[#09090B] text-foreground">
         <div className="relative h-12 w-12 rounded-full flex items-center justify-center font-black text-white text-xl bg-gradient-to-br from-red-600 to-rose-700 shadow-lg animate-pulse">
@@ -1225,7 +1235,7 @@ export default function ClientLayoutWrapper({ children }: { children: React.Reac
     );
   }
 
-  if (!user) {
+  if (!user && !isLocallyAuthenticated) {
     return (
       <EnterpriseLoginScreen
         onLogin={handleEnterpriseLogin}

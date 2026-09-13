@@ -26,15 +26,6 @@ try {
   db = getFirestore(app);
 }
 export const auth = getAuth(app);
-
-// Guarantee persistent auth sessions across page refreshes and browser tabs
-if (typeof window !== "undefined") {
-  setPersistence(auth, indexedDBLocalPersistence).catch(() => {
-    setPersistence(auth, browserLocalPersistence).catch((err) => {
-      console.warn("Could not set auth persistence:", err);
-    });
-  });
-}
 export const storage = getStorage(app);
 
 // Initialize Cloud Messaging (only works in browser)
