@@ -197,6 +197,9 @@ interface Credit {
     changes: string[];
     summary: string;
   }[];
+  settledAsFull?: boolean;
+  settlementReason?: string;
+  waivedAmount?: number;
 }
 
 // --- Sortable Item for Kanban Board ---
@@ -411,6 +414,18 @@ export default function CreditsPage() {
   const [returnAgentMobile, setReturnAgentMobile] = useState("");
   const [returnReason, setReturnReason] = useState("");
   const [returnItems, setReturnItems] = useState<{ barcode: string; itemName: string; quantity: number; unitPrice: number; totalPrice: number }[]>([]);
+
+  // Partial Payment Full Settlement & Cancellation State
+  const [isMarkAsPaidAll, setIsMarkAsPaidAll] = useState(false);
+  const [settlementReasonCategory, setSettlementReasonCategory] = useState("خصم تسوية متفق عليه مع المورد");
+  const [settlementReasonNotes, setSettlementReasonNotes] = useState("");
+
+  // Standalone Settlement Modal for existing partial credits
+  const [showSettleModal, setShowSettleModal] = useState(false);
+  const [selectedCreditForSettle, setSelectedCreditForSettle] = useState<Credit | null>(null);
+  const [standaloneSettleReasonCategory, setStandaloneSettleReasonCategory] = useState("خصم تسوية متفق عليه مع المورد");
+  const [standaloneSettleNotes, setStandaloneSettleNotes] = useState("");
+  const [isSubmittingSettle, setIsSubmittingSettle] = useState(false);
 
   const fetchPendingReturnsList = async () => {
     setLoadingPendingReturns(true);
@@ -1624,6 +1639,94 @@ export default function CreditsPage() {
     }
   };
 
+  // Standalone Settlement Modal Open for already-partial credits
+  const handleOpenSettleModal = (credit: Credit) => {
+    setSelectedCreditForSettle(credit);
+    setStandaloneSettleReasonCategory("خصم تسوية متفق عليه مع المورد");
+    setStandaloneSettleNotes("");
+    setShowSettleModal(true);
+  };
+
+  // Confirm Standalone Settlement and Cancel Remaining Credit
+  const handleConfirmStandaloneSettle = async () => {
+    if (!selectedCreditForSettle) return;
+    const currentPaid = Number(selectedCreditForSettle.paidAmount) || 0;
+    const totalDue = (Number(selectedCreditForSettle.amountDue) || 0) + (Number(selectedCreditForSettle.tax) || 0);
+    const remainingToCancel = Math.max(0, totalDue - currentPaid);
+    const finalReason = standaloneSettleReasonCategory + (standaloneSettleNotes.trim() ? ` - ${standaloneSettleNotes.trim()}` : "");
+
+    setIsSubmittingSettle(true);
+    const toastId = toast.loading(isAr ? "جاري إغلاق الفاتورة وإلغاء المديونية المتبقية..." : "Settling invoice & cancelling remaining credit...");
+
+    try {
+      const userEmail = currentUser?.email || 
+        (typeof window !== "undefined" ? localStorage.getItem("circlek_email") || localStorage.getItem("circlek_role") : null) || 
+        "manager";
+      const userRole = typeof window !== "undefined" ? (localStorage.getItem("circlek_role") || "manager") : "manager";
+
+      const settlementHistoryEntry = {
+        editedAt: new Date().toISOString(),
+        editedBy: userEmail,
+        role: userRole,
+        changes: [
+          `اعتماد المبلغ المسدد سابقاً (EGP ${currentPaid.toLocaleString()}) كسداد كامل ونهائي للفاتورة وإغلاق الدين`,
+          `المبلغ المتبقي الذي تم إسقاطه وإلغاؤه من المديونية: EGP ${remainingToCancel.toLocaleString()}`,
+          `سبب التسوية والإلغاء: ${finalReason}`
+        ],
+        summary: `تسوية كاملة وإلغاء المتبقي - السبب: ${finalReason}`
+      };
+
+      const payload = {
+        status: "paid",
+        settledAsFull: true,
+        settlementReason: finalReason,
+        waivedAmount: remainingToCancel,
+        editHistory: [...(selectedCreditForSettle.editHistory || []), settlementHistoryEntry],
+        isEdited: true,
+        lastEditedAt: new Date().toISOString(),
+        lastEditedBy: userEmail,
+        updatedAt: serverTimestamp()
+      };
+
+      await updateDoc(doc(db, "credits", selectedCreditForSettle.id), cleanPayload(payload));
+
+      // Update local state
+      setCredits(prev => prev.map(c => c.id === selectedCreditForSettle.id ? {
+        ...c,
+        status: "paid" as any,
+        settledAsFull: true,
+        settlementReason: finalReason,
+        waivedAmount: remainingToCancel,
+        editHistory: [...(c.editHistory || []), settlementHistoryEntry],
+        isEdited: true,
+        lastEditedAt: new Date().toISOString(),
+        lastEditedBy: userEmail
+      } : c));
+
+      // Log to dbService
+      dbService.logAction(
+        userEmail,
+        auth.currentUser?.displayName || "User",
+        userRole,
+        "Full Settlement & Cancellation of Credit",
+        `Credit ID: ${selectedCreditForSettle.id}, Inv: #${selectedCreditForSettle.invoiceNumber || "N/A"}`,
+        `Company: ${selectedCreditForSettle.companyName}, Cancelled Remaining: EGP ${remainingToCancel}, Reason: ${finalReason}`
+      ).catch(() => {});
+
+      // Notify financials sync across all views and tabs
+      notifyFinancialsUpdated(selectedCreditForSettle.storeId || "eL-alamein-4");
+
+      toast.success(isAr ? "تم إغلاق وتسوية المديونية بالكامل وإلغاء المتبقي بنجاح!" : "Credit marked as fully settled and remaining cancelled!", { id: toastId });
+      setShowSettleModal(false);
+      setSelectedCreditForSettle(null);
+    } catch (err: any) {
+      console.error("Error settling credit:", err);
+      toast.error((isAr ? "خطأ في تسوية المديونية: " : "Error settling credit: ") + err.message, { id: toastId });
+    } finally {
+      setIsSubmittingSettle(false);
+    }
+  };
+
   const handleOpenPaymentModal = (credit: Credit) => {
     setSelectedCreditForPayment(credit);
     setPaymentDate(new Date().toISOString().split('T')[0]);
@@ -1646,6 +1749,9 @@ export default function CreditsPage() {
     setReturnAgentMobile("");
     setReturnReason("");
     setReturnItems([]);
+    setIsMarkAsPaidAll(false);
+    setSettlementReasonCategory("خصم تسوية متفق عليه مع المورد");
+    setSettlementReasonNotes("");
     setShowPaymentItemsDrawer(false);
 
     // Initialize PO details
@@ -1747,13 +1853,20 @@ export default function CreditsPage() {
       // Credit debt is settled by the full gross amount (Cash + Return)
       const newPaidAmount = currentPaid + grossSettled;
       const totalDue = (Number(selectedCreditForPayment.amountDue) || 0) + (Number(selectedCreditForPayment.tax) || 0);
+      const remainingAfterPayment = Math.max(0, totalDue - newPaidAmount);
 
+      const isFullSettlement = isMarkAsPaidAll || newPaidAmount >= totalDue;
       let newStatus = selectedCreditForPayment.status;
-      if (newPaidAmount >= totalDue) {
+      if (isFullSettlement) {
         newStatus = "paid";
       } else if (newPaidAmount > 0) {
         newStatus = "partial";
       }
+
+      const waivedAmount = isMarkAsPaidAll ? remainingAfterPayment : 0;
+      const finalSettlementReason = isMarkAsPaidAll 
+        ? (settlementReasonCategory + (settlementReasonNotes.trim() ? ` - ${settlementReasonNotes.trim()}` : ""))
+        : "";
 
       // Step A: Prepare receipt image if bank transfer
       let bankTransferReceiptUrl = null;
@@ -1905,11 +2018,38 @@ export default function CreditsPage() {
       const finalInvoiceUrl = selectedCreditForPayment.invoiceUrl || (selectedCreditForPayment.invoiceUrls && selectedCreditForPayment.invoiceUrls.length > 0 ? selectedCreditForPayment.invoiceUrls[0] : "");
 
       // Step D: Update Credit Document in Firestore
+      const userRole = typeof window !== "undefined" ? (localStorage.getItem("circlek_role") || "manager") : "manager";
+
+      let settlementHistoryEntry: any = null;
+      if (isMarkAsPaidAll) {
+        settlementHistoryEntry = {
+          editedAt: new Date().toISOString(),
+          editedBy: userEmail,
+          role: userRole,
+          changes: [
+            `إغلاق المديونية واعتبار الدفعة (EGP ${grossSettled.toLocaleString()}) سداداً نهائياً للمديونية بالكامل`,
+            `المبلغ المسدد: EGP ${grossSettled.toLocaleString()}`,
+            `المبلغ المتبقي الملغى / المعفى: EGP ${waivedAmount.toLocaleString()}`,
+            `سبب التسوية والإلغاء: ${finalSettlementReason}`
+          ],
+          summary: `تسوية كاملة وإغلاق الدين - السبب: ${finalSettlementReason}`
+        };
+      }
+
       const creditUpdatePayload: any = {
         paidAmount: newPaidAmount,
         status: newStatus,
         updatedAt: serverTimestamp(),
       };
+      if (isMarkAsPaidAll) {
+        creditUpdatePayload.settledAsFull = true;
+        creditUpdatePayload.settlementReason = finalSettlementReason;
+        creditUpdatePayload.waivedAmount = waivedAmount;
+        creditUpdatePayload.editHistory = [...(selectedCreditForPayment.editHistory || []), settlementHistoryEntry];
+        creditUpdatePayload.isEdited = true;
+        creditUpdatePayload.lastEditedAt = new Date().toISOString();
+        creditUpdatePayload.lastEditedBy = userEmail;
+      }
       if (finalPoNumber && !selectedCreditForPayment.poNumber) {
         creditUpdatePayload.poNumber = finalPoNumber;
       }
@@ -1926,6 +2066,15 @@ export default function CreditsPage() {
         ...c, 
         paidAmount: newPaidAmount, 
         status: newStatus as any,
+        ...(isMarkAsPaidAll ? {
+          settledAsFull: true,
+          settlementReason: finalSettlementReason,
+          waivedAmount,
+          editHistory: [...(c.editHistory || []), settlementHistoryEntry],
+          isEdited: true,
+          lastEditedAt: new Date().toISOString(),
+          lastEditedBy: userEmail
+        } : {}),
         ...(finalPoNumber ? { poNumber: finalPoNumber } : {}),
         ...(finalItems.length > 0 ? { items: finalItems } : {}),
         ...(finalPoImageUrl ? { poImageUrl: finalPoImageUrl } : {})
@@ -1933,6 +2082,17 @@ export default function CreditsPage() {
 
       if (finalItems.length > 0) {
         setCreditPOItems(prev => ({ ...prev, [selectedCreditForPayment.id]: finalItems }));
+      }
+
+      if (isMarkAsPaidAll) {
+        dbService.logAction(
+          userEmail,
+          auth.currentUser?.displayName || "User",
+          userRole,
+          "Full Settlement & Cancellation of Credit via Payment",
+          `Credit ID: ${selectedCreditForPayment.id}, Inv: #${selectedCreditForPayment.invoiceNumber || "N/A"}`,
+          `Company: ${selectedCreditForPayment.companyName}, Paid: EGP ${grossSettled}, Waived Remaining: EGP ${waivedAmount}, Reason: ${finalSettlementReason}`
+        ).catch(() => {});
       }
 
       // Step E: Write cash_payments (single source of truth for payments ledger)
@@ -1947,6 +2107,9 @@ export default function CreditsPage() {
         returnNumber: finalReturnNumber || "",
         returnTransferOutNumber: finalTransferOutNum,
         returnDetails: returnDetailsPayload,
+        isFullSettlement: isMarkAsPaidAll,
+        settlementReason: isMarkAsPaidAll ? finalSettlementReason : "",
+        waivedAmount: isMarkAsPaidAll ? waivedAmount : 0,
         category: "order",
         subCategory: "credit_payment",
         categoryNote: `Credit Payment - Inv #${selectedCreditForPayment.invoiceNumber || ""} - ${selectedCreditForPayment.companyName || ""}${finalPoNumber ? ` • PO #${finalPoNumber}` : ''}${hasReturn ? ` (RTV: EGP ${numReturnAmount})` : ''}`,
@@ -2036,9 +2199,11 @@ export default function CreditsPage() {
       toast.success(
         hasReturn
           ? (isAr ? "تم تسجيل سداد الدين وخصم المرتجع بنجاح! جاري الانتقال إلى المدفوعات..." : "Payment & Return settled successfully! Redirecting to payments...")
-          : (newStatus === "paid" 
-              ? (isAr ? "تم سداد الدين بالكامل! جاري الانتقال إلى المدفوعات..." : "Credit fully paid! Redirecting to payments...") 
-              : (isAr ? "تم تسجيل الدفعة بنجاح! جاري الانتقال إلى المدفوعات..." : "Payment recorded successfully! Redirecting to payments...")), 
+          : (isMarkAsPaidAll
+              ? (isAr ? "تم إغلاق وتسوية الفاتورة بالكامل وإلغاء المتبقي بنجاح! جاري الانتقال إلى المدفوعات..." : "Credit marked as fully settled & remaining cancelled! Redirecting to payments...")
+              : (newStatus === "paid" 
+                  ? (isAr ? "تم سداد الدين بالكامل! جاري الانتقال إلى المدفوعات..." : "Credit fully paid! Redirecting to payments...") 
+                  : (isAr ? "تم تسجيل الدفعة بنجاح! جاري الانتقال إلى المدفوعات..." : "Payment recorded successfully! Redirecting to payments..."))), 
         { id: saveToastId, duration: 3000 }
       );
       
@@ -2359,7 +2524,7 @@ html, body {
 
     credits.forEach(c => {
       const total = c.amountDue + c.tax;
-      const remaining = total - c.paidAmount;
+      const remaining = (c.status === "paid" || c.settledAsFull) ? 0 : Math.max(0, total - c.paidAmount);
 
       if (c.onSalesOnly) {
         salesOnly += remaining;
@@ -2367,7 +2532,7 @@ html, body {
         return; // Skip other stats if sales only
       }
 
-      if (c.status === "paid") {
+      if (c.status === "paid" || c.settledAsFull) {
         collected += c.paidAmount;
         collectedCount++;
       } else if (c.status === "partial") {
@@ -2423,7 +2588,7 @@ html, body {
 
       credits.forEach(c => {
         try {
-          if (!c || c.status === "paid" || c.onSalesOnly) return;
+          if (!c || c.status === "paid" || c.settledAsFull || c.onSalesOnly) return;
           const remaining = (Number(c.amountDue || 0) + Number(c.tax || 0)) - Number(c.paidAmount || 0);
           if (remaining <= 0) return;
 
@@ -2629,21 +2794,21 @@ html, body {
 
       const gross = Number(credit.amountDue || 0) + Number(credit.tax || 0);
       const paid = Number(credit.paidAmount || 0);
-      const remaining = Math.max(0, gross - paid);
+      const remaining = (credit.status === "paid" || credit.settledAsFull) ? 0 : Math.max(0, gross - paid);
 
       item.totalInvoiced += gross;
       item.totalPaid += paid;
       item.totalRemainingDue += remaining;
 
       const colDate = credit.collectionDate ? credit.collectionDate.substring(0, 10) : "";
-      const isOverdue = remaining > 0 && colDate && colDate < today && credit.status !== "paid";
+      const isOverdue = remaining > 0 && colDate && colDate < today && credit.status !== "paid" && !credit.settledAsFull;
 
       if (isOverdue) {
         item.overdueInvoicesCount += 1;
         item.overdueAmount += remaining;
       }
 
-      if (credit.status === "paid" || remaining === 0) {
+      if (credit.status === "paid" || credit.settledAsFull || remaining === 0) {
         item.fullyPaidCount += 1;
         item.fullyPaidAmount += paid;
       } else if (paid > 0 && remaining > 0) {
@@ -3077,7 +3242,7 @@ html, body {
               {filteredCredits.map((credit, idx) => {
               const isExpanded = expandedCredits[credit.id];
               const totalDue = credit.amountDue + credit.tax;
-              const remaining = totalDue - credit.paidAmount;
+              const remaining = (credit.status === 'paid' || credit.settledAsFull) ? 0 : Math.max(0, totalDue - credit.paidAmount);
 
               // Generate Company Initials for Avatar
               const initials = credit.companyName.substring(0, 2).toUpperCase();
@@ -3121,7 +3286,11 @@ html, body {
                           </button>
                           
                           {/* Modern Badges */}
-                          {credit.status === 'paid' && <span className="bg-emerald-950/60 text-emerald-400 border border-emerald-800/60 text-[10px] sm:text-xs px-2.5 py-0.5 rounded-full font-bold flex items-center gap-1"><CheckCircle size={12}/> Paid</span>}
+                          {credit.status === 'paid' && (
+                            <span className="bg-emerald-950/60 text-emerald-400 border border-emerald-800/60 text-[10px] sm:text-xs px-2.5 py-0.5 rounded-full font-bold flex items-center gap-1">
+                              <CheckCircle size={12}/> {credit.settledAsFull ? (isAr ? "تسوية كاملة" : "Settled Full") : "Paid"}
+                            </span>
+                          )}
                           {credit.status === 'pending' && <span className="bg-blue-950/60 text-blue-400 border border-blue-800/60 text-[10px] sm:text-xs px-2.5 py-0.5 rounded-full font-bold flex items-center gap-1"><Clock size={12}/> Pending</span>}
                           {credit.status === 'partial' && <span className="bg-amber-950/60 text-amber-400 border border-amber-800/60 text-[10px] sm:text-xs px-2.5 py-0.5 rounded-full font-bold flex items-center gap-1"><PieChart size={12}/> Partial</span>}
                           {credit.status === 'overdue' && <span className="bg-rose-950/60 text-rose-400 border border-rose-800/60 text-[10px] sm:text-xs px-2.5 py-0.5 rounded-full font-bold flex items-center gap-1"><AlertTriangle size={12}/> Overdue</span>}
@@ -3238,13 +3407,25 @@ html, body {
                                 </span>
                               )}
                             </h4>
-                            {credit.status !== "paid" && (
-                              <button
-                                onClick={() => handleOpenPaymentModal(credit)}
-                                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-xs font-bold shadow-md hover:-translate-y-0.5 transition-all flex items-center gap-1.5 cursor-pointer"
-                              >
-                                <Plus size={15} /> {isAr ? "تسجيل سداد" : "Record Payment"}
-                              </button>
+                            {credit.status !== "paid" && !credit.settledAsFull && (
+                              <div className="flex items-center gap-2">
+                                {credit.status === "partial" && (
+                                  <button
+                                    onClick={() => handleOpenSettleModal(credit)}
+                                    className="bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 px-3 py-2 rounded-xl text-xs font-bold shadow-sm transition-all flex items-center gap-1.5 cursor-pointer"
+                                    title={isAr ? "اعتبار المبلغ المسدد سداداً نهائياً وإلغاء المتبقي" : "Settle as Full & Cancel Remaining"}
+                                  >
+                                    <CheckCircle2 size={14} />
+                                    <span>{isAr ? "تسوية كاملة وإغلاق الدين" : "Settle Full"}</span>
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => handleOpenPaymentModal(credit)}
+                                  className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-xs font-bold shadow-md hover:-translate-y-0.5 transition-all flex items-center gap-1.5 cursor-pointer"
+                                >
+                                  <Plus size={15} /> {isAr ? "تسجيل سداد" : "Record Payment"}
+                                </button>
+                              </div>
                             )}
                           </div>
                           
@@ -3713,7 +3894,7 @@ html, body {
                                 {c.invoices.map((inv) => {
                                   const gross = Number(inv.amountDue || 0) + Number(inv.tax || 0);
                                   const paid = Number(inv.paidAmount || 0);
-                                  const remaining = Math.max(0, gross - paid);
+                                  const remaining = (inv.status === 'paid' || inv.settledAsFull) ? 0 : Math.max(0, gross - paid);
                                   const colDate = inv.collectionDate ? inv.collectionDate.substring(0, 10) : "";
                                   
                                   const today = new Date();
@@ -3721,7 +3902,7 @@ html, body {
                                   const dueObj = colDate ? new Date(colDate) : null;
                                   if (dueObj) dueObj.setHours(0, 0, 0, 0);
                                   const diffDays = dueObj ? Math.round((dueObj.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)) : null;
-                                  const isInvOverdue = remaining > 0 && diffDays !== null && diffDays < 0 && inv.status !== 'paid';
+                                  const isInvOverdue = remaining > 0 && diffDays !== null && diffDays < 0 && inv.status !== 'paid' && !inv.settledAsFull;
 
                                   return (
                                     <tr key={inv.id} className="hover:bg-slate-900/40 transition-colors">
@@ -3729,6 +3910,11 @@ html, body {
                                       <td className="p-2.5 font-mono">
                                         <div className="font-bold text-white">#{inv.invoiceNumber || "N/A"}</div>
                                         {inv.poNumber && <div className="text-[10px] text-teal-400">PO: {inv.poNumber}</div>}
+                                        {inv.settledAsFull && (
+                                          <div className="text-[9px] text-emerald-400 font-sans font-bold" title={inv.settlementReason}>
+                                            ✓ {isAr ? "تسوية كاملة" : "Full Settlement"}
+                                          </div>
+                                        )}
                                       </td>
 
                                       <td className="p-2.5 font-mono text-slate-400 whitespace-nowrap">
@@ -3762,9 +3948,10 @@ html, body {
                                       </td>
 
                                       <td className="p-2.5 text-center">
-                                        {inv.status === 'paid' || remaining === 0 ? (
-                                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                                            Paid
+                                        {inv.status === 'paid' || inv.settledAsFull || remaining === 0 ? (
+                                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 inline-flex items-center gap-1">
+                                            <CheckCircle2 size={10} />
+                                            {inv.settledAsFull ? (isAr ? "تسوية كاملة" : "Settled Full") : "Paid"}
                                           </span>
                                         ) : isInvOverdue ? (
                                           <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 border border-red-500/40">
@@ -3783,14 +3970,26 @@ html, body {
 
                                       <td className="p-2.5 text-center">
                                         {remaining > 0 && (
-                                          <button 
-                                            onClick={() => handleOpenPaymentModal(inv)}
-                                            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-lg text-xs transition-colors flex items-center gap-1 mx-auto shadow-sm"
-                                            title="Record Payment for this invoice"
-                                          >
-                                            <CreditCard size={13} />
-                                            <span>سداد (Pay)</span>
-                                          </button>
+                                          <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                                            {paid > 0 && (
+                                              <button 
+                                                onClick={() => handleOpenSettleModal(inv)}
+                                                className="px-2.5 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 font-bold rounded-lg text-xs transition-colors flex items-center gap-1 shadow-sm cursor-pointer"
+                                                title={isAr ? "اعتبار المبلغ المدفوع سداداً نهائياً وإلغاء المتبقي" : "Settle as Paid All"}
+                                              >
+                                                <CheckCircle2 size={12} />
+                                                <span>{isAr ? "تسوية كاملة" : "Settle Full"}</span>
+                                              </button>
+                                            )}
+                                            <button 
+                                              onClick={() => handleOpenPaymentModal(inv)}
+                                              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-lg text-xs transition-colors flex items-center gap-1 shadow-sm cursor-pointer"
+                                              title="Record Payment for this invoice"
+                                            >
+                                              <CreditCard size={13} />
+                                              <span>{isAr ? "سداد" : "Pay"}</span>
+                                            </button>
+                                          </div>
                                         )}
                                       </td>
 
@@ -4845,18 +5044,259 @@ html, body {
                     </div>
                   </div>
 
-                </div>
+                    {/* FULL SETTLEMENT QUESTION & DEBT CANCELLATION */}
+                    {(() => {
+                      const curPaid = Number(selectedCreditForPayment?.paidAmount || 0);
+                      const totDue = (Number(selectedCreditForPayment?.amountDue || 0) + Number(selectedCreditForPayment?.tax || 0));
+                      const grossPay = parseFloat(paymentAmount) || 0;
+                      const remAfter = Math.max(0, totDue - (curPaid + grossPay));
+                      const isPartialPay = remAfter > 0;
+
+                      if (!isPartialPay) return null;
+
+                      return (
+                        <div className={`p-4 sm:p-5 rounded-2xl border transition-all duration-200 mt-5 ${isMarkAsPaidAll ? 'bg-gradient-to-br from-emerald-950/40 via-slate-900 to-slate-950 border-emerald-500/70 shadow-lg shadow-emerald-500/10' : 'bg-slate-900/60 border-slate-800'}`}>
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                            <div className="flex items-start sm:items-center gap-3">
+                              <div className={`w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center shrink-0 transition-colors ${isMarkAsPaidAll ? 'bg-emerald-500 text-white shadow-md shadow-emerald-500/20' : 'bg-slate-800 text-slate-400'}`}>
+                                <CheckCircle2 size={22} />
+                              </div>
+                              <div>
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <h4 className="text-sm sm:text-base font-black text-white">
+                                    {isAr ? "هل يعتبر هذا المبلغ سداداً كاملاً ونهائياً للمديونية؟" : "Is this payment the full and final settlement?"}
+                                  </h4>
+                                  {isMarkAsPaidAll && (
+                                    <span className="text-[10px] font-black px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 animate-pulse">
+                                      {isAr ? "تسوية كاملة وإلغاء المتبقي" : "Mark as Paid All"}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-slate-400 mt-0.5">
+                                  {isAr 
+                                    ? `المتبقي الحسابي بعد هذه الدفعة هو ${remAfter.toLocaleString(undefined, { minimumFractionDigits: 2 })} ج.م. هل تم الاتفاق على اعتباره سداداً نهائياً وإسقاط المتبقي بالكامل؟` 
+                                    : `Remaining balance after this payment is EGP ${remAfter.toLocaleString()}. Settle as paid in full & cancel remaining debt?`}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center bg-slate-800 p-1 rounded-xl shrink-0 border border-slate-700 self-start sm:self-center">
+                              <button
+                                type="button"
+                                onClick={() => setIsMarkAsPaidAll(false)}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${!isMarkAsPaidAll ? 'bg-slate-700 text-white shadow-xs' : 'text-slate-400 hover:text-white'}`}
+                              >
+                                {isAr ? "لا، دفعة جزئية" : "No, Partial"}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setIsMarkAsPaidAll(true)}
+                                className={`px-3.5 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer ${isMarkAsPaidAll ? 'bg-emerald-600 text-white shadow-xs' : 'text-slate-400 hover:text-white'}`}
+                              >
+                                {isAr ? "نعم، سداد كامل ونهائي" : "Yes, Full Settlement"}
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Reason and Audit Trail details (shown when marked as full settlement) */}
+                          {isMarkAsPaidAll && (
+                            <div className="mt-4 pt-3.5 border-t border-slate-800 space-y-3">
+                              <div>
+                                <label className="block text-xs font-bold text-emerald-400 uppercase tracking-wider mb-2">
+                                  {isAr ? "سبب إغلاق وتسوية الدين بالكامل (مطلوب للتوثيق) *" : "Settlement & Cancellation Reason (Audit Required) *"}
+                                </label>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2.5">
+                                  {[
+                                    { id: "discount", ar: "خصم تسوية متفق عليه مع المورد", en: "Agreed Supplier Settlement Discount" },
+                                    { id: "rtv_damage", ar: "مرتجع بضاعة / تالف وتصفيات", en: "RTV / Damaged Goods Credit Note" },
+                                    { id: "price_diff", ar: "فروق أسعار وتعديل فاتورة", en: "Price Difference / Invoice Adjustment" },
+                                    { id: "mutual_clear", ar: "إعفاء اتفاقي وتصفية نهائية للحساب", en: "Mutual Debt Clearance / Waiver" },
+                                    { id: "custom", ar: "أخرى (سبب مخصص)", en: "Other / Custom Reason" }
+                                  ].map((reasonItem) => (
+                                    <button
+                                      key={reasonItem.id}
+                                      type="button"
+                                      onClick={() => setSettlementReasonCategory(reasonItem.ar)}
+                                      className={`p-2 rounded-xl text-xs font-bold text-right border transition-all cursor-pointer ${settlementReasonCategory === reasonItem.ar ? 'bg-emerald-950/70 border-emerald-500 text-emerald-300 ring-1 ring-emerald-500/40' : 'bg-slate-800/60 border-slate-700 text-slate-400 hover:text-slate-200'}`}
+                                    >
+                                      ✓ {isAr ? reasonItem.ar : reasonItem.en}
+                                    </button>
+                                  ))}
+                                </div>
+
+                                <textarea
+                                  placeholder={isAr ? "أدخل تفاصيل وملاحظات إضافية حول اتفاقية التسوية (تُسجل تلقائياً في سجل تاريخ الفاتورة)..." : "Additional details/justification for audit history..."}
+                                  rows={2}
+                                  className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-700 focus:border-emerald-500 text-xs text-white placeholder-slate-500 outline-none resize-none font-medium"
+                                  value={settlementReasonNotes}
+                                  onChange={(e) => setSettlementReasonNotes(e.target.value)}
+                                />
+                              </div>
+
+                              <div className="p-3 bg-emerald-950/40 border border-emerald-800/50 rounded-xl text-xs text-emerald-300 flex items-start gap-2.5">
+                                <CheckCircle2 size={16} className="shrink-0 text-emerald-400 mt-0.5" />
+                                <div className="space-y-0.5">
+                                  <p className="font-bold">
+                                    {isAr ? "تأكيد إغلاق المديونية وتصفير الحساب:" : "Debt Clearance Notice:"}
+                                  </p>
+                                  <p className="text-[11px] text-emerald-200/90 leading-relaxed">
+                                    {isAr 
+                                      ? `سيتم تحويل حالة الفاتورة فوراً إلى "مسددة بالكامل" (Paid)، وإلغاء وتصفير المديونية المتبقية (${remAfter.toLocaleString(undefined, { minimumFractionDigits: 2 })} ج.م)، وتوثيق سبب التسوية والمسؤول والتاريخ في سجل تاريخ الفاتورة (Audit Trail) وإلغاء الدين من حساب الشركة.` 
+                                      : `Invoice will be marked as "Paid", remaining balance (EGP ${remAfter.toLocaleString()}) cancelled to 0, and audit trail logged.`}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
                 <div className="flex justify-end gap-3 p-6 border-t border-slate-800 bg-slate-900/60 mt-auto">
                   <button type="button" onClick={() => setShowPaymentModal(false)} className="px-6 py-3 bg-slate-800 border border-slate-700 text-slate-300 rounded-xl font-bold hover:bg-slate-700 hover:text-white transition-all shadow-sm cursor-pointer">{isAr ? "إلغاء" : "Cancel"}</button>
                   <button type="submit" disabled={isSubmitting} className="px-6 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2 shadow-md shadow-indigo-600/20 hover:shadow-indigo-600/40 hover:-translate-y-0.5 transition-all cursor-pointer">
                     {isSubmitting && <Loader2 size={18} className="animate-spin" />}
-                    {isAr ? "تأكيد التحصيل" : "Confirm Payment"}
+                    {isAr ? (isMarkAsPaidAll ? "تأكيد السداد الكامل وإغلاق الدين" : "تأكيد التحصيل") : (isMarkAsPaidAll ? "Confirm Full Settlement" : "Confirm Payment")}
                   </button>
                 </div>
               </form>
             </motion.div>
           </motion.div>
         )}
+      </AnimatePresence>
+
+      {/* Standalone Modal to Settle Already-Partial Credit */}
+      <AnimatePresence>
+        {showSettleModal && selectedCreditForSettle && (() => {
+          const currentPaid = Number(selectedCreditForSettle.paidAmount) || 0;
+          const totalDue = (Number(selectedCreditForSettle.amountDue) || 0) + (Number(selectedCreditForSettle.tax) || 0);
+          const remainingToCancel = Math.max(0, totalDue - currentPaid);
+
+          return (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto"
+            >
+              <motion.div 
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                className="bg-[#0B1121] border border-slate-700/80 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl"
+              >
+                {/* Modal Header */}
+                <div className="flex justify-between items-center p-5 border-b border-slate-800 bg-slate-900/60">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center font-black">
+                      <CheckCircle2 size={20} />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-bold text-white">
+                        {isAr ? "تسوية كاملة وإغلاق مديونية الفاتورة" : "Full Settlement & Cancel Remaining Debt"}
+                      </h3>
+                      <p className="text-xs text-slate-400">
+                        {selectedCreditForSettle.companyName} • Inv #{selectedCreditForSettle.invoiceNumber || "N/A"}
+                      </p>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => { setShowSettleModal(false); setSelectedCreditForSettle(null); }}
+                    className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                {/* Modal Body */}
+                <div className="p-6 space-y-4 text-xs">
+                  {/* Financial Breakdown */}
+                  <div className="grid grid-cols-3 gap-2.5 p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-center">
+                    <div>
+                      <span className="text-[10px] text-slate-500 uppercase font-bold block">{isAr ? "إجمالي الفاتورة" : "Total Due"}</span>
+                      <span className="font-mono font-bold text-white text-sm">EGP {totalDue.toLocaleString()}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-emerald-400 uppercase font-bold block">{isAr ? "المسدد سابقاً" : "Already Paid"}</span>
+                      <span className="font-mono font-bold text-emerald-400 text-sm">EGP {currentPaid.toLocaleString()}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-rose-400 uppercase font-bold block">{isAr ? "المتبقي للإلغاء" : "To Cancel"}</span>
+                      <span className="font-mono font-bold text-rose-400 text-sm">EGP {remainingToCancel.toLocaleString()}</span>
+                    </div>
+                  </div>
+
+                  {/* Question Prompt */}
+                  <div className="p-3.5 rounded-xl bg-amber-950/20 border border-amber-800/40 text-amber-200">
+                    <p className="font-bold text-xs text-amber-300 mb-1 flex items-center gap-1.5">
+                      <AlertCircle size={14} />
+                      {isAr ? "هل تؤكد اعتبار المبلغ المسدد سداداً نهائياً وإسقاط المتبقي؟" : "Confirm accepting paid amount as full settlement?"}
+                    </p>
+                    <p className="text-[11px] text-amber-200/80 leading-relaxed">
+                      {isAr 
+                        ? `سيتم تحويل حالة الفاتورة إلى "مسددة بالكامل" (Paid)، وإلغاء المتبقي (${remainingToCancel.toLocaleString()} ج.م) وتصفيره بالكامل من حسابات ومديونيات شركة (${selectedCreditForSettle.companyName}).`
+                        : `Invoice status will change to "Paid", remaining balance (EGP ${remainingToCancel.toLocaleString()}) cancelled, and removed from active liabilities.`}
+                    </p>
+                  </div>
+
+                  {/* Reason Selection */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">
+                      {isAr ? "سبب التسوية والإلغاء (يُسجل في التاريخ) *" : "Settlement & Cancellation Reason *"}
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
+                      {[
+                        { id: "discount", ar: "خصم تسوية متفق عليه مع المورد", en: "Agreed Supplier Settlement Discount" },
+                        { id: "rtv_damage", ar: "مرتجع بضاعة / تالف وتصفيات", en: "RTV / Damaged Goods Credit Note" },
+                        { id: "price_diff", ar: "فروق أسعار وتعديل فاتورة", en: "Price Difference / Invoice Adjustment" },
+                        { id: "mutual_clear", ar: "إعفاء اتفاقي وتصفية نهائية للحساب", en: "Mutual Debt Clearance / Waiver" },
+                        { id: "custom", ar: "أخرى (سبب مخصص)", en: "Other / Custom Reason" }
+                      ].map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => setStandaloneSettleReasonCategory(item.ar)}
+                          className={`p-2 rounded-xl text-xs font-bold text-right border transition-all cursor-pointer ${standaloneSettleReasonCategory === item.ar ? 'bg-emerald-950/70 border-emerald-500 text-emerald-300 ring-1 ring-emerald-500/40' : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'}`}
+                        >
+                          ✓ {isAr ? item.ar : item.en}
+                        </button>
+                      ))}
+                    </div>
+
+                    <textarea
+                      placeholder={isAr ? "أدخل تفاصيل وملاحظات إضافية حول سبب التسوية وإسقاط المديونية..." : "Additional details/justification..."}
+                      rows={2}
+                      className="w-full p-2.5 rounded-xl bg-slate-950 border border-slate-800 focus:border-emerald-500 text-xs text-white placeholder-slate-500 outline-none resize-none font-medium"
+                      value={standaloneSettleNotes}
+                      onChange={(e) => setStandaloneSettleNotes(e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                {/* Modal Actions */}
+                <div className="flex justify-end gap-3 p-4 border-t border-slate-800 bg-slate-900/60">
+                  <button 
+                    type="button" 
+                    onClick={() => { setShowSettleModal(false); setSelectedCreditForSettle(null); }}
+                    className="px-4 py-2 bg-slate-800 border border-slate-700 text-slate-300 rounded-xl font-bold hover:bg-slate-700 hover:text-white transition-all text-xs cursor-pointer"
+                  >
+                    {isAr ? "إلغاء" : "Cancel"}
+                  </button>
+                  <button 
+                    type="button" 
+                    disabled={isSubmittingSettle}
+                    onClick={handleConfirmStandaloneSettle}
+                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold transition-all text-xs flex items-center gap-1.5 shadow-md shadow-emerald-600/20 cursor-pointer disabled:opacity-50"
+                  >
+                    {isSubmittingSettle && <Loader2 size={14} className="animate-spin" />}
+                    <CheckCircle2 size={14} />
+                    <span>{isAr ? "تأكيد التسوية الكاملة وإلغاء المديونية" : "Confirm Full Settlement"}</span>
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          );
+        })()}
       </AnimatePresence>
 
       <AnimatePresence>
@@ -5054,6 +5494,30 @@ html, body {
               </div>
               
               <div className="p-6 overflow-y-auto max-h-[60vh] space-y-6">
+                {/* Full Settlement Notice Banner */}
+                {selectedCreditForView.settledAsFull && (
+                  <div className="bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60 rounded-2xl p-4 flex items-start gap-3 text-xs">
+                    <div className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 font-bold">
+                      <CheckCircle2 size={18} />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-emerald-800 dark:text-emerald-300 text-sm">
+                        {isAr ? "تمت تسوية الفاتورة كسداد كامل ونهائي" : "Settled as Full & Final Payment"}
+                      </h4>
+                      <p className="text-emerald-700 dark:text-emerald-400 mt-0.5 leading-relaxed">
+                        {isAr 
+                          ? `تم إغلاق المديونية واعتماد المبلغ المسدد كسداد نهائي، وإسقاط وإلغاء المتبقي بقيمة (EGP ${Number(selectedCreditForView.waivedAmount || 0).toLocaleString()}).`
+                          : `The credit was closed as full settlement, cancelling remaining balance of EGP ${Number(selectedCreditForView.waivedAmount || 0).toLocaleString()}.`}
+                      </p>
+                      {selectedCreditForView.settlementReason && (
+                        <p className="text-slate-600 dark:text-slate-400 mt-1 font-medium">
+                          <strong>{isAr ? "السبب:" : "Reason:"}</strong> {selectedCreditForView.settlementReason}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {/* Audit Trail / Edit History */}
                 {selectedCreditForView.isEdited && selectedCreditForView.editHistory && selectedCreditForView.editHistory.length > 0 && (
                   <div className="bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200/80 dark:border-amber-800/40 rounded-2xl p-4.5 mb-4 shadow-xs">
