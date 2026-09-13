@@ -185,6 +185,8 @@ export function MobileHeader() {
     try {
       await signOut(auth);
       if (typeof window !== "undefined") {
+        localStorage.removeItem("circlek_logged_in");
+        localStorage.removeItem("circlek_user_email");
         localStorage.removeItem("circlek_role");
         localStorage.removeItem("circlek_user_name");
         sessionStorage.clear();

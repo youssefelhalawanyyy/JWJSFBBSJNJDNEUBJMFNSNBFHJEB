@@ -43,6 +43,13 @@ export function OwnerSidebar() {
 
   const handleLogout = async () => {
     playPopSound();
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("circlek_logged_in");
+      localStorage.removeItem("circlek_user_email");
+      localStorage.removeItem("circlek_role");
+      localStorage.removeItem("circlek_user_name");
+      sessionStorage.clear();
+    }
     await signOut(auth);
   };
 

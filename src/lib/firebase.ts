@@ -1,6 +1,6 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore, initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, doc, getDocs, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, query, Firestore } from "firebase/firestore";
-import { getAuth } from "firebase/auth";
+import { getAuth, setPersistence, browserLocalPersistence, indexedDBLocalPersistence } from "firebase/auth";
 import { getStorage } from "firebase/storage";
 import { getMessaging, isSupported } from "firebase/messaging";
 import { queueOfflineWrite } from "./offline-sync";
@@ -26,6 +26,15 @@ try {
   db = getFirestore(app);
 }
 export const auth = getAuth(app);
+
+// Guarantee persistent auth sessions across page refreshes and browser tabs
+if (typeof window !== "undefined") {
+  setPersistence(auth, indexedDBLocalPersistence).catch(() => {
+    setPersistence(auth, browserLocalPersistence).catch((err) => {
+      console.warn("Could not set auth persistence:", err);
+    });
+  });
+}
 export const storage = getStorage(app);
 
 // Initialize Cloud Messaging (only works in browser)

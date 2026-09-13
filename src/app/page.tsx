@@ -996,13 +996,22 @@ export default function VIPBentoEnterprisePortal() {
 
             {/* Sign Out Button */}
             <button
-              onClick={() => {
-                const sessionId = sessionStorage.getItem("device_session_id");
-                if (sessionId) {
-                  deleteDoc(doc(db, "active_sessions", sessionId)).catch(() => {});
-                  sessionStorage.removeItem("device_session_id");
+              onClick={async () => {
+                if (typeof window !== "undefined") {
+                  const sessionId = sessionStorage.getItem("device_session_id");
+                  if (sessionId) {
+                    deleteDoc(doc(db, "active_sessions", sessionId)).catch(() => {});
+                    sessionStorage.removeItem("device_session_id");
+                  }
+                  sessionStorage.removeItem("device_login_time");
+                  sessionStorage.removeItem("circlek_welcomed");
+                  localStorage.removeItem("circlek_logged_in");
+                  localStorage.removeItem("circlek_user_email");
+                  localStorage.removeItem("circlek_user_name");
+                  localStorage.removeItem("circlek_role");
+                  sessionStorage.clear();
                 }
-                signOut(auth);
+                await signOut(auth);
               }}
               className="px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/20 text-xs font-bold text-rose-400 hover:text-rose-300 transition-all cursor-pointer flex items-center gap-1.5"
               title={isAr ? "تسجيل الخروج" : "Sign Out"}

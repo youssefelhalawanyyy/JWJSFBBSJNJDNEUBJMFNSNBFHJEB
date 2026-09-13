@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { Sun, Moon, Shield, Database, LayoutDashboard, FileText, Printer, ClipboardList, CheckCircle, Search, LogOut, User, Users, Menu, X, Bell, PackageX, Truck, CalendarDays, DollarSign, Activity, Wallet, Tag, Sparkles, Barcode, Briefcase, Clock, PackageMinus, Package, Bot, ShoppingCart, Box, Monitor, ArrowLeft } from "lucide-react";
 import { auth, messaging, dbService, db } from "@/lib/firebase";
 import { getToken } from "firebase/messaging";
-import { signInWithEmailAndPassword, onAuthStateChanged, signOut, updateProfile } from "firebase/auth";
+import { signInWithEmailAndPassword, onAuthStateChanged, signOut, updateProfile, setPersistence, browserLocalPersistence, indexedDBLocalPersistence } from "firebase/auth";
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, orderBy, limit } from "firebase/firestore";
 import PwaInstallPrompt from "./PwaInstallPrompt";
 import type { User as FirebaseUser } from "firebase/auth";
@@ -40,14 +40,34 @@ export default function ClientLayoutWrapper({ children }: { children: React.Reac
   const { language, setLanguage, t } = useLanguage();
   const { logoUrl, brandColor } = useBrand();
   const [theme, setTheme] = useState<"light" | "dark">("dark");
-  const [role, setRole] = useState<string>("owner");
-  const [user, setUser] = useState<FirebaseUser | null>(null);
-  const [userDoc, setUserDoc] = useState<any>(null);
-  const [authLoading, setAuthLoading] = useState(() => {
+  const [role, setRole] = useState<string>(() => {
     if (typeof window !== "undefined") {
-      return Boolean(localStorage.getItem("circlek_role") || localStorage.getItem("circlek_user_name"));
+      return localStorage.getItem("circlek_role") || "owner";
     }
-    return false;
+    return "owner";
+  });
+  const [user, setUser] = useState<FirebaseUser | null>(() => {
+    if (typeof window !== "undefined" && auth?.currentUser) {
+      return auth.currentUser;
+    }
+    return null;
+  });
+  const [userDoc, setUserDoc] = useState<any>(() => {
+    if (typeof window !== "undefined") {
+      const cachedName = localStorage.getItem("circlek_user_name");
+      const cachedRole = localStorage.getItem("circlek_role");
+      if (cachedName || cachedRole) {
+        return { displayName: cachedName || "Manager", role: cachedRole || "manager" };
+      }
+    }
+    return null;
+  });
+  const [authLoading, setAuthLoading] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      if (auth?.currentUser) return false;
+      if (localStorage.getItem("circlek_logged_in") === "true") return true;
+    }
+    return true;
   });
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -199,17 +219,25 @@ export default function ClientLayoutWrapper({ children }: { children: React.Reac
     const storedRole = localStorage.getItem("circlek_role") || "owner";
     setRole(storedRole);
 
+    // Safety fallback: give Firebase ample time to read from IndexedDB on refresh
     const safetyTimeout = setTimeout(() => {
       setAuthLoading(false);
-    }, 250);
+    }, 5000);
     const clockTimer = setInterval(() => setCurrentDateTime(new Date()), 30000);
     setCurrentDateTime(new Date());
 
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      clearTimeout(safetyTimeout);
       setUser(currentUser);
       setAuthLoading(false);
 
       if (currentUser) {
+        if (typeof window !== "undefined") {
+          localStorage.setItem("circlek_logged_in", "true");
+          if (currentUser.email) {
+            localStorage.setItem("circlek_user_email", currentUser.email);
+          }
+        }
         if (!localStorage.getItem("has_seen_welcome_anh_v2")) {
           setShowWelcomeModal(true);
         }
@@ -374,6 +402,12 @@ export default function ClientLayoutWrapper({ children }: { children: React.Reac
           }
         }
         })().catch(console.warn);
+      } else {
+        setUserDoc(null);
+        if (typeof window !== "undefined") {
+          localStorage.removeItem("circlek_logged_in");
+          localStorage.removeItem("circlek_user_email");
+        }
       }
     });
 
@@ -553,11 +587,18 @@ export default function ClientLayoutWrapper({ children }: { children: React.Reac
       }
       sessionStorage.removeItem("device_login_time");
       sessionStorage.removeItem("circlek_welcomed");
+      localStorage.removeItem("circlek_logged_in");
+      localStorage.removeItem("circlek_user_email");
       localStorage.removeItem("circlek_user_name");
+      localStorage.removeItem("circlek_role");
+      sessionStorage.clear();
 
       try {
         await signOut(auth);
       } catch (e) {}
+      setUser(null);
+      setUserDoc(null);
+      setAuthLoading(false);
 
       setTimeout(() => {
         window.location.href = "/";
@@ -1100,9 +1141,20 @@ export default function ClientLayoutWrapper({ children }: { children: React.Reac
     let lastError: any = null;
     for (const emailToTry of uniqueCandidates) {
       try {
+        if (typeof window !== "undefined") {
+          await setPersistence(auth, indexedDBLocalPersistence).catch(() => {
+            return setPersistence(auth, browserLocalPersistence);
+          }).catch(() => {});
+        }
         const cred = await signInWithEmailAndPassword(auth, emailToTry, pass);
         setUser(cred.user);
         setAuthLoading(false);
+        if (typeof window !== "undefined") {
+          localStorage.setItem("circlek_logged_in", "true");
+          if (cred.user.email) {
+            localStorage.setItem("circlek_user_email", cred.user.email);
+          }
+        }
         toast.success(language === "ar" ? "تم تسجيل الدخول بنجاح" : "Signed in successfully", { duration: 3000 });
         router.refresh();
         return;
@@ -1125,6 +1177,29 @@ export default function ClientLayoutWrapper({ children }: { children: React.Reac
       { duration: 5000 }
     );
     throw lastError;
+  };
+
+  const handleSignOut = async () => {
+    if (typeof window !== "undefined") {
+      const sessionId = sessionStorage.getItem("device_session_id");
+      if (sessionId) {
+        deleteDoc(doc(db, "active_sessions", sessionId)).catch(() => {});
+        sessionStorage.removeItem("device_session_id");
+      }
+      sessionStorage.removeItem("device_login_time");
+      sessionStorage.removeItem("circlek_welcomed");
+      localStorage.removeItem("circlek_logged_in");
+      localStorage.removeItem("circlek_user_email");
+      localStorage.removeItem("circlek_user_name");
+      localStorage.removeItem("circlek_role");
+      sessionStorage.clear();
+    }
+    try {
+      await signOut(auth);
+    } catch (e) {}
+    setUser(null);
+    setUserDoc(null);
+    setAuthLoading(false);
   };
 
   const totalNotifications = systemNotifications.length + pendingShiftCount + pendingVoidCount + pendingExpiriesCount + pendingReturnsCount + pendingOosCount;
@@ -1255,14 +1330,7 @@ export default function ClientLayoutWrapper({ children }: { children: React.Reac
 
               {/* Sign Out Button */}
               <button
-                onClick={() => {
-                  const sessionId = sessionStorage.getItem("device_session_id");
-                  if (sessionId) {
-                    deleteDoc(doc(db, "active_sessions", sessionId)).catch(() => {});
-                    sessionStorage.removeItem("device_session_id");
-                  }
-                  signOut(auth);
-                }}
+                onClick={handleSignOut}
                 className="px-3 py-1.5 rounded-xl text-xs font-bold transition-all bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 hover:bg-rose-500/20 cursor-pointer flex items-center gap-1.5"
                 title={t("nav.sign_out")}
               >
@@ -1329,15 +1397,9 @@ export default function ClientLayoutWrapper({ children }: { children: React.Reac
             })}
             <div className="border-t border-border mt-2 pt-4">
               <button
-                onClick={() => {
+                onClick={async () => {
                   setMobileMenuOpen(false);
-                  // Clean up device session before signing out
-                  const sessionId = sessionStorage.getItem("device_session_id");
-                  if (sessionId) {
-                    deleteDoc(doc(db, "active_sessions", sessionId)).catch(() => {});
-                    sessionStorage.removeItem("device_session_id");
-                  }
-                  signOut(auth);
+                  await handleSignOut();
                 }}
                 className="w-full flex items-center justify-center gap-2 p-3 rounded-lg border border-rose-500/30 bg-rose-500/10 text-rose-600 dark:text-rose-400 font-bold"
               >
