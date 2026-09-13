@@ -1022,9 +1022,11 @@ export default function CreditsPage() {
         poImageUrl
       };
 
-      // Sync products to master DB if we have items
+      // Sync products to master DB in background non-blocking so save is instantaneous
       if (poItems && poItems.length > 0) {
-        await syncProductsToMaster(poItems, collectionDate || new Date().toISOString().split('T')[0], companyName);
+        syncProductsToMaster(poItems, collectionDate || new Date().toISOString().split('T')[0], companyName).catch(err => {
+          console.warn("Background product sync error:", err);
+        });
       }
 
       const docRef = await addDoc(collection(db, "credits"), newCredit);
