@@ -66,6 +66,7 @@ import {
   MoreHorizontal,
   CreditCard,
   Building,
+  Building2,
   Image as ImageIcon,
   ClipboardPaste,
   Eye,
@@ -307,7 +308,9 @@ export default function CreditsPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [monthFilter, setMonthFilter] = useState("");
-  const [viewMode, setViewMode] = useState<"list" | "board">("list");
+  const [viewMode, setViewMode] = useState<"list" | "board" | "companies">("list");
+  const [expandedCompanies, setExpandedCompanies] = useState<Record<string, boolean>>({});
+  const [companySortBy, setCompanySortBy] = useState<"owed" | "overdue" | "name" | "invoices">("owed");
   
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -2571,6 +2574,155 @@ html, body {
     }
   }, [selectedSupplierProfile, credits]);
 
+  // Reactive Company-by-Company Liabilities & Owed Ledger Calculations
+  const companySummaries = useMemo(() => {
+    const map = new Map<string, {
+      companyName: string;
+      totalInvoicesCount: number;
+      totalInvoiced: number;
+      totalPaid: number;
+      totalRemainingDue: number;
+      overdueInvoicesCount: number;
+      overdueAmount: number;
+      partialInvoicesCount: number;
+      partialPaidAmount: number;
+      partialRemainingAmount: number;
+      fullyPaidCount: number;
+      fullyPaidAmount: number;
+      openInvoicesCount: number;
+      openRemainingAmount: number;
+      invoices: Credit[];
+    }>();
+
+    const today = new Date().toISOString().substring(0, 10);
+
+    credits.forEach((credit: Credit) => {
+      if (credit.onSalesOnly) return;
+      const rawComp = (credit.companyName || "Unknown Company").trim();
+      if (!rawComp) return;
+
+      if (!map.has(rawComp)) {
+        map.set(rawComp, {
+          companyName: rawComp,
+          totalInvoicesCount: 0,
+          totalInvoiced: 0,
+          totalPaid: 0,
+          totalRemainingDue: 0,
+          overdueInvoicesCount: 0,
+          overdueAmount: 0,
+          partialInvoicesCount: 0,
+          partialPaidAmount: 0,
+          partialRemainingAmount: 0,
+          fullyPaidCount: 0,
+          fullyPaidAmount: 0,
+          openInvoicesCount: 0,
+          openRemainingAmount: 0,
+          invoices: []
+        });
+      }
+
+      const item = map.get(rawComp)!;
+      item.invoices.push(credit);
+      item.totalInvoicesCount += 1;
+
+      const gross = Number(credit.amountDue || 0) + Number(credit.tax || 0);
+      const paid = Number(credit.paidAmount || 0);
+      const remaining = Math.max(0, gross - paid);
+
+      item.totalInvoiced += gross;
+      item.totalPaid += paid;
+      item.totalRemainingDue += remaining;
+
+      const colDate = credit.collectionDate ? credit.collectionDate.substring(0, 10) : "";
+      const isOverdue = remaining > 0 && colDate && colDate < today && credit.status !== "paid";
+
+      if (isOverdue) {
+        item.overdueInvoicesCount += 1;
+        item.overdueAmount += remaining;
+      }
+
+      if (credit.status === "paid" || remaining === 0) {
+        item.fullyPaidCount += 1;
+        item.fullyPaidAmount += paid;
+      } else if (paid > 0 && remaining > 0) {
+        item.partialInvoicesCount += 1;
+        item.partialPaidAmount += paid;
+        item.partialRemainingAmount += remaining;
+      } else {
+        item.openInvoicesCount += 1;
+        item.openRemainingAmount += remaining;
+      }
+    });
+
+    // Sort invoices within each company: newest / overdue first
+    map.forEach(item => {
+      item.invoices.sort((a, b) => {
+        const aDate = a.collectionDate || a.date || "";
+        const bDate = b.collectionDate || b.date || "";
+        return bDate.localeCompare(aDate);
+      });
+    });
+
+    return Array.from(map.values());
+  }, [credits]);
+
+  const companyOverallStats = useMemo(() => {
+    let totalGross = 0;
+    let totalRemainingDue = 0;
+    let totalOverdue = 0;
+    let totalPaid = 0;
+    let totalPartialPaid = 0;
+    let activeCreditorsCount = 0;
+
+    companySummaries.forEach(c => {
+      totalGross += c.totalInvoiced;
+      totalRemainingDue += c.totalRemainingDue;
+      totalOverdue += c.overdueAmount;
+      totalPaid += c.totalPaid;
+      totalPartialPaid += c.partialPaidAmount;
+      if (c.totalRemainingDue > 0) {
+        activeCreditorsCount += 1;
+      }
+    });
+
+    return {
+      totalGross,
+      totalRemainingDue,
+      totalOverdue,
+      totalPaid,
+      totalPartialPaid,
+      activeCreditorsCount,
+      totalCompaniesCount: companySummaries.length
+    };
+  }, [companySummaries]);
+
+  const filteredCompanies = useMemo(() => {
+    let list = [...companySummaries];
+    if (searchTerm.trim()) {
+      const q = searchTerm.toLowerCase();
+      list = list.filter(c => 
+        c.companyName.toLowerCase().includes(q) || 
+        c.invoices.some(inv => 
+          (inv.invoiceNumber && inv.invoiceNumber.toLowerCase().includes(q)) || 
+          (inv.poNumber && inv.poNumber.toLowerCase().includes(q))
+        )
+      );
+    }
+
+    if (companySortBy === "owed") {
+      list.sort((a, b) => b.totalRemainingDue - a.totalRemainingDue);
+    } else if (companySortBy === "overdue") {
+      list.sort((a, b) => b.overdueAmount - a.overdueAmount);
+    } else if (companySortBy === "name") {
+      list.sort((a, b) => a.companyName.localeCompare(b.companyName));
+    } else if (companySortBy === "invoices") {
+      list.sort((a, b) => b.totalInvoicesCount - a.totalInvoicesCount);
+    }
+
+    return list;
+  }, [companySummaries, searchTerm, companySortBy]);
+
+
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over) return;
@@ -2815,8 +2967,12 @@ html, body {
             
             {/* View Mode Toggle */}
             <div className="flex bg-slate-900 p-1 rounded-xl border border-slate-800">
-              <button onClick={() => setViewMode('list')} className={`px-4 py-2 rounded-lg font-bold text-sm transition-all ${viewMode === 'list' ? 'bg-indigo-600 shadow-sm text-white' : 'text-slate-400 hover:text-slate-200'}`}>List</button>
-              <button onClick={() => setViewMode('board')} className={`px-4 py-2 rounded-lg font-bold text-sm transition-all ${viewMode === 'board' ? 'bg-indigo-600 shadow-sm text-white' : 'text-slate-400 hover:text-slate-200'}`}>Board</button>
+              <button onClick={() => setViewMode('list')} className={`px-3 sm:px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition-all ${viewMode === 'list' ? 'bg-indigo-600 shadow-sm text-white' : 'text-slate-400 hover:text-slate-200'}`}>List</button>
+              <button onClick={() => setViewMode('board')} className={`px-3 sm:px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition-all ${viewMode === 'board' ? 'bg-indigo-600 shadow-sm text-white' : 'text-slate-400 hover:text-slate-200'}`}>Board</button>
+              <button onClick={() => setViewMode('companies')} className={`px-3 sm:px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition-all flex items-center gap-1.5 ${viewMode === 'companies' ? 'bg-indigo-600 shadow-sm text-white' : 'text-slate-400 hover:text-slate-200'}`}>
+                <Building2 size={15} />
+                <span>Companies Owed (مديونيات الشركات)</span>
+              </button>
             </div>
 
             <div className="relative flex-1 w-full">
@@ -3298,7 +3454,7 @@ html, body {
           )}
 
         </div>
-        ) : (
+        ) : viewMode === 'board' ? (
           /* KANBAN BOARD VIEW */
           <div className="h-[700px] overflow-hidden flex gap-4">
             <DndContext sensors={sensors} collisionDetection={closestCorners} onDragEnd={handleDragEnd}>
@@ -3321,6 +3477,336 @@ html, body {
                 onSelect={(c) => setSelectedSupplierProfile(c.companyName)} 
               />
             </DndContext>
+          </div>
+        ) : (
+          /* COMPANY LIABILITIES & TOTAL CREDITS OWED LEDGER VIEW */
+          <div className="space-y-6">
+            
+            {/* Top Overview KPI Banner */}
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              
+              <div className="bg-gradient-to-br from-rose-950/40 to-slate-900 border border-rose-800/40 p-4 rounded-2xl shadow-sm">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[11px] font-bold text-rose-400 uppercase tracking-wider">Total Owed (المديونية)</span>
+                  <AlertCircle className="w-4 h-4 text-rose-400" />
+                </div>
+                <p className="text-xl sm:text-2xl font-black text-rose-300 font-mono tracking-tight">
+                  EGP {companyOverallStats.totalRemainingDue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </p>
+                <p className="text-[10px] text-rose-400/70 font-semibold mt-1">Outstanding to all suppliers</p>
+              </div>
+
+              <div className="bg-gradient-to-br from-red-950/50 to-slate-900 border border-red-700/50 p-4 rounded-2xl shadow-sm">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[11px] font-bold text-red-400 uppercase tracking-wider">Total Overdue (متأخرات)</span>
+                  <AlertTriangle className="w-4 h-4 text-red-400" />
+                </div>
+                <p className="text-xl sm:text-2xl font-black text-red-400 font-mono tracking-tight">
+                  EGP {companyOverallStats.totalOverdue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </p>
+                <p className="text-[10px] text-red-400/70 font-semibold mt-1">Passed collection deadline</p>
+              </div>
+
+              <div className="bg-gradient-to-br from-emerald-950/40 to-slate-900 border border-emerald-800/40 p-4 rounded-2xl shadow-sm">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider">Total Paid (تم سداده)</span>
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                </div>
+                <p className="text-xl sm:text-2xl font-black text-emerald-300 font-mono tracking-tight">
+                  EGP {companyOverallStats.totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </p>
+                <p className="text-[10px] text-emerald-400/70 font-semibold mt-1">Full + partial settlements</p>
+              </div>
+
+              <div className="bg-gradient-to-br from-amber-950/40 to-slate-900 border border-amber-800/40 p-4 rounded-2xl shadow-sm">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider">Partial Paid (مسدد جزئياً)</span>
+                  <CreditCard className="w-4 h-4 text-amber-400" />
+                </div>
+                <p className="text-xl sm:text-2xl font-black text-amber-300 font-mono tracking-tight">
+                  EGP {companyOverallStats.totalPartialPaid.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </p>
+                <p className="text-[10px] text-amber-400/70 font-semibold mt-1">Across active open invoices</p>
+              </div>
+
+              <div className="col-span-2 md:col-span-1 bg-slate-900/80 border border-slate-800 p-4 rounded-2xl shadow-sm flex flex-col justify-between">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Creditor Companies</span>
+                  <Building className="w-4 h-4 text-slate-400" />
+                </div>
+                <div>
+                  <p className="text-xl sm:text-2xl font-black text-white font-mono tracking-tight">
+                    {companyOverallStats.activeCreditorsCount} <span className="text-xs text-slate-500 font-sans">/ {companyOverallStats.totalCompaniesCount}</span>
+                  </p>
+                  <p className="text-[10px] text-teal-400 font-semibold mt-1">Live Reactive Sync</p>
+                </div>
+              </div>
+
+            </div>
+
+            {/* Sorting & Expand Controls */}
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-slate-900/60 p-3 rounded-2xl border border-slate-800">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-400 uppercase">Sort Companies:</span>
+                <select 
+                  value={companySortBy}
+                  onChange={(e) => setCompanySortBy(e.target.value as any)}
+                  className="bg-slate-950 border border-slate-800 text-xs font-bold text-slate-200 rounded-xl px-3 py-1.5 outline-none cursor-pointer focus:border-indigo-500"
+                >
+                  <option value="owed">Highest Owed First (الأعلى مديونية)</option>
+                  <option value="overdue">Highest Overdue First (الأكثر تأخيراً)</option>
+                  <option value="name">Alphabetical (أبجدياً)</option>
+                  <option value="invoices">Most Invoices (الأكثر فواتير)</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => {
+                    const allOpen: Record<string, boolean> = {};
+                    filteredCompanies.forEach(c => { allOpen[c.companyName] = true; });
+                    setExpandedCompanies(allOpen);
+                  }}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-bold transition-colors"
+                >
+                  Expand All
+                </button>
+                <button 
+                  onClick={() => setExpandedCompanies({})}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-bold transition-colors"
+                >
+                  Collapse All
+                </button>
+              </div>
+            </div>
+
+            {/* Company Cards List */}
+            {filteredCompanies.length === 0 ? (
+              <div className="text-center py-16 bg-[#0B1121] rounded-3xl border border-slate-800 border-dashed">
+                <Building className="mx-auto text-slate-600 mb-3" size={48} />
+                <p className="text-slate-300 font-bold text-lg">No companies found matching criteria.</p>
+                <p className="text-slate-500 text-sm">All company liabilities are settled or adjust search filter.</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {filteredCompanies.map((c) => {
+                  const isExpanded = !!expandedCompanies[c.companyName];
+                  const hasOverdue = c.overdueAmount > 0;
+                  const hasPartial = c.partialInvoicesCount > 0;
+                  const paidPct = c.totalInvoiced > 0 ? Math.min(100, Math.round((c.totalPaid / c.totalInvoiced) * 100)) : 0;
+                  const initials = c.companyName.substring(0, 2).toUpperCase();
+
+                  return (
+                    <div 
+                      key={c.companyName}
+                      className={`bg-[#0B1121] border rounded-2xl shadow-xl transition-all overflow-hidden ${
+                        hasOverdue ? 'border-red-900/60 shadow-red-950/10' : 'border-slate-800 hover:border-slate-700'
+                      }`}
+                    >
+                      {/* Card Header */}
+                      <div 
+                        onClick={() => setExpandedCompanies(prev => ({ ...prev, [c.companyName]: !prev[c.companyName] }))}
+                        className="p-4 sm:p-5 cursor-pointer hover:bg-slate-900/40 transition-colors"
+                      >
+                        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+                          
+                          {/* Left: Avatar & Name */}
+                          <div className="flex items-center gap-3.5 min-w-0">
+                            <div className="w-12 h-12 rounded-2xl bg-indigo-950 border border-indigo-700/50 flex items-center justify-center font-black text-indigo-300 text-base shadow-inner shrink-0">
+                              {initials}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <h3 className="font-black text-white text-base sm:text-lg tracking-tight truncate">
+                                  {c.companyName}
+                                </h3>
+                                {hasOverdue && (
+                                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 border border-red-500/40 flex items-center gap-1">
+                                    <AlertTriangle size={11} />
+                                    EGP {c.overdueAmount.toLocaleString()} Overdue
+                                  </span>
+                                )}
+                                {hasPartial && (
+                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                                    {c.partialInvoicesCount} Partial ({c.partialPaidAmount.toLocaleString()} EGP paid)
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-slate-400 mt-0.5">
+                                {c.totalInvoicesCount} Total Invoices • {c.openInvoicesCount + c.partialInvoicesCount} Active Debt • {c.fullyPaidCount} Fully Paid
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Right: Key Figures Grid */}
+                          <div className="flex items-center gap-4 sm:gap-6 flex-wrap justify-between w-full lg:w-auto">
+                            
+                            <div className="text-right">
+                              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Currently Owed</p>
+                              <p className="text-base sm:text-lg font-black font-mono text-rose-400">
+                                EGP {c.totalRemainingDue.toLocaleString()}
+                              </p>
+                            </div>
+
+                            <div className="text-right">
+                              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Total Paid</p>
+                              <p className="text-base sm:text-lg font-bold font-mono text-emerald-400">
+                                EGP {c.totalPaid.toLocaleString()}
+                              </p>
+                            </div>
+
+                            <div className="text-right hidden sm:block">
+                              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Gross Total</p>
+                              <p className="text-sm font-semibold font-mono text-slate-300">
+                                EGP {c.totalInvoiced.toLocaleString()}
+                              </p>
+                            </div>
+
+                            <div className="p-2 bg-slate-900 rounded-xl text-slate-400 hover:text-white transition-colors">
+                              {isExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+                            </div>
+
+                          </div>
+
+                        </div>
+
+                        {/* Progress Bar */}
+                        <div className="mt-4 w-full bg-slate-950 h-2 rounded-full overflow-hidden border border-slate-800/80 flex">
+                          <div 
+                            style={{ width: `${paidPct}%` }}
+                            className="bg-gradient-to-r from-emerald-600 to-teal-400 h-full transition-all duration-500"
+                            title={`Paid: ${paidPct}%`}
+                          />
+                          <div 
+                            style={{ width: `${100 - paidPct}%` }}
+                            className={`${hasOverdue ? 'bg-red-500/80' : 'bg-rose-500/40'} h-full transition-all duration-500`}
+                            title={`Remaining: ${100 - paidPct}%`}
+                          />
+                        </div>
+                        <div className="flex justify-between items-center text-[10px] text-slate-500 font-semibold mt-1">
+                          <span>{paidPct}% Settled</span>
+                          <span>{100 - paidPct}% Outstanding</span>
+                        </div>
+
+                      </div>
+
+                      {/* Expanded Invoices Table */}
+                      {isExpanded && (
+                        <div className="border-t border-slate-800/80 bg-slate-950/70 p-4 sm:p-5 animate-in fade-in slide-in-from-top-2">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs text-left">
+                              <thead>
+                                <tr className="text-[10px] text-slate-400 uppercase tracking-wider border-b border-slate-800 bg-slate-900/60">
+                                  <th className="p-2.5 font-bold">Invoice / PO</th>
+                                  <th className="p-2.5 font-bold">Issue Date</th>
+                                  <th className="p-2.5 font-bold">Collection Due</th>
+                                  <th className="p-2.5 font-bold text-right">Gross Total</th>
+                                  <th className="p-2.5 font-bold text-right">Paid Amount</th>
+                                  <th className="p-2.5 font-bold text-right text-rose-400">Remaining</th>
+                                  <th className="p-2.5 font-bold text-center">Status</th>
+                                  <th className="p-2.5 font-bold text-center">Action</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-800/50">
+                                {c.invoices.map((inv) => {
+                                  const gross = Number(inv.amountDue || 0) + Number(inv.tax || 0);
+                                  const paid = Number(inv.paidAmount || 0);
+                                  const remaining = Math.max(0, gross - paid);
+                                  const colDate = inv.collectionDate ? inv.collectionDate.substring(0, 10) : "";
+                                  
+                                  const today = new Date();
+                                  today.setHours(0, 0, 0, 0);
+                                  const dueObj = colDate ? new Date(colDate) : null;
+                                  if (dueObj) dueObj.setHours(0, 0, 0, 0);
+                                  const diffDays = dueObj ? Math.round((dueObj.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)) : null;
+                                  const isInvOverdue = remaining > 0 && diffDays !== null && diffDays < 0 && inv.status !== 'paid';
+
+                                  return (
+                                    <tr key={inv.id} className="hover:bg-slate-900/40 transition-colors">
+                                      
+                                      <td className="p-2.5 font-mono">
+                                        <div className="font-bold text-white">#{inv.invoiceNumber || "N/A"}</div>
+                                        {inv.poNumber && <div className="text-[10px] text-teal-400">PO: {inv.poNumber}</div>}
+                                      </td>
+
+                                      <td className="p-2.5 font-mono text-slate-400 whitespace-nowrap">
+                                        {inv.date || "N/A"}
+                                      </td>
+
+                                      <td className="p-2.5 whitespace-nowrap">
+                                        <div className="font-mono text-slate-300">{colDate || "N/A"}</div>
+                                        {isInvOverdue ? (
+                                          <span className="text-[9px] font-black text-red-400 flex items-center gap-0.5">
+                                            <AlertTriangle size={10} />
+                                            {Math.abs(diffDays!)}d overdue
+                                          </span>
+                                        ) : diffDays !== null && diffDays <= 3 && remaining > 0 ? (
+                                          <span className="text-[9px] font-bold text-amber-400">
+                                            Due in {diffDays}d
+                                          </span>
+                                        ) : null}
+                                      </td>
+
+                                      <td className="p-2.5 text-right font-mono font-bold text-slate-200 whitespace-nowrap">
+                                        {gross.toLocaleString()} EGP
+                                      </td>
+
+                                      <td className="p-2.5 text-right font-mono font-bold text-emerald-400 whitespace-nowrap">
+                                        {paid > 0 ? `${paid.toLocaleString()} EGP` : "-"}
+                                      </td>
+
+                                      <td className="p-2.5 text-right font-mono font-black text-rose-400 whitespace-nowrap">
+                                        {remaining > 0 ? `${remaining.toLocaleString()} EGP` : "0 EGP"}
+                                      </td>
+
+                                      <td className="p-2.5 text-center">
+                                        {inv.status === 'paid' || remaining === 0 ? (
+                                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                                            Paid
+                                          </span>
+                                        ) : isInvOverdue ? (
+                                          <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 border border-red-500/40">
+                                            Overdue
+                                          </span>
+                                        ) : paid > 0 ? (
+                                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                                            Partial
+                                          </span>
+                                        ) : (
+                                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/30">
+                                            Open
+                                          </span>
+                                        )}
+                                      </td>
+
+                                      <td className="p-2.5 text-center">
+                                        {remaining > 0 && (
+                                          <button 
+                                            onClick={() => handleOpenPaymentModal(inv)}
+                                            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-lg text-xs transition-colors flex items-center gap-1 mx-auto shadow-sm"
+                                            title="Record Payment for this invoice"
+                                          >
+                                            <CreditCard size={13} />
+                                            <span>سداد (Pay)</span>
+                                          </button>
+                                        )}
+                                      </td>
+
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
           </div>
         )}
         </div>
