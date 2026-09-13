@@ -29,7 +29,22 @@ import {
   Loader2,
   X,
   Printer,
-  UserCheck
+  UserCheck,
+  TrendingUp,
+  ArrowUpRight,
+  Wallet,
+  Coins,
+  ShieldCheck,
+  Sparkles,
+  Layers,
+  Calendar,
+  Filter,
+  CheckCircle2,
+  CreditCard,
+  Crown,
+  FileSpreadsheet,
+  ArrowDownRight,
+  RefreshCw
 } from "lucide-react";
 import html2canvas from "html2canvas";
 import { jsPDF } from "jspdf";
@@ -379,244 +394,439 @@ export default function DepositsPage() {
     return Object.values(summaryMap).sort((a, b) => b.total - a.total);
   }, [deposits]);
 
-  return (
-    <div className="space-y-6">
-      {/* Header & Controls */}
-      <div className="bg-card border border-border shadow-sm p-4 rounded-2xl flex flex-col sm:flex-row justify-between items-center gap-4">
-        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
-          <select 
-            value={filterType}
-            onChange={(e: any) => setFilterType(e.target.value)}
-            className="p-3 bg-muted border border-border rounded-xl font-bold text-sm text-foreground focus:ring-2 focus:ring-slate-500 outline-none"
-          >
-            <option value="day">Daily</option>
-            <option value="month">Monthly</option>
-            <option value="year">Yearly</option>
-            <option value="all">All Time</option>
-          </select>
+  const totalOwnerDistributed = ownerSummary.reduce((acc, curr) => acc + curr.total, 0);
 
+  return (
+    <div className="space-y-6 pb-12">
+      
+      {/* 1. Executive Glassmorphism Toolbar & Controls */}
+      <div className="relative bg-slate-900/80 backdrop-blur-xl border border-slate-800/80 shadow-2xl p-4 sm:p-5 rounded-3xl flex flex-col lg:flex-row justify-between items-stretch lg:items-center gap-4 overflow-hidden">
+        {/* Subtle ambient glow meshes */}
+        <div className="absolute -top-12 -left-12 w-48 h-48 bg-rose-500/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute -bottom-12 -right-12 w-48 h-48 bg-cyan-500/10 rounded-full blur-3xl pointer-events-none" />
+
+        {/* Left: Filter Controls */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto relative z-10">
+          
+          {/* Segmented Filter Type Pills */}
+          <div className="flex items-center p-1 bg-slate-950/80 border border-slate-800 rounded-2xl">
+            {(["day", "month", "year", "all"] as const).map((type) => (
+              <button
+                key={type}
+                type="button"
+                onClick={() => setFilterType(type)}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition-all capitalize ${
+                  filterType === type 
+                    ? "bg-gradient-to-r from-rose-500 to-pink-600 text-white shadow-md shadow-rose-500/20" 
+                    : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+                }`}
+              >
+                {type === "day" ? "Daily" : type === "month" ? "Monthly" : type === "year" ? "Yearly" : "All Time"}
+              </button>
+            ))}
+          </div>
+
+          {/* Dynamic Date/Time Picker */}
           {filterType === "day" && (
-            <input 
-              type="date" 
-              value={filterValue}
-              onChange={(e) => setFilterValue(e.target.value)}
-              className="w-full sm:w-auto p-3 bg-muted border border-border rounded-xl font-bold text-lg text-foreground focus:ring-2 focus:ring-slate-500 outline-none"
-            />
+            <div className="relative flex items-center">
+              <Calendar className="w-4 h-4 text-slate-400 absolute left-3 pointer-events-none" />
+              <input 
+                type="date" 
+                value={filterValue}
+                onChange={(e) => setFilterValue(e.target.value)}
+                className="w-full sm:w-auto pl-9 pr-4 py-2 bg-slate-950/80 border border-slate-800 rounded-2xl font-bold text-sm text-slate-100 focus:ring-2 focus:ring-rose-500/50 focus:border-rose-500 outline-none transition-all shadow-inner"
+              />
+            </div>
           )}
 
           {filterType === "month" && (
-            <input 
-              type="month" 
-              value={filterValue.substring(0, 7)}
-              onChange={(e) => setFilterValue(e.target.value + "-01")}
-              className="w-full sm:w-auto p-3 bg-muted border border-border rounded-xl font-bold text-lg text-foreground focus:ring-2 focus:ring-slate-500 outline-none"
-            />
+            <div className="relative flex items-center">
+              <Calendar className="w-4 h-4 text-slate-400 absolute left-3 pointer-events-none" />
+              <input 
+                type="month" 
+                value={filterValue.substring(0, 7)}
+                onChange={(e) => setFilterValue(e.target.value + "-01")}
+                className="w-full sm:w-auto pl-9 pr-4 py-2 bg-slate-950/80 border border-slate-800 rounded-2xl font-bold text-sm text-slate-100 focus:ring-2 focus:ring-rose-500/50 focus:border-rose-500 outline-none transition-all shadow-inner"
+              />
+            </div>
           )}
 
           {filterType === "year" && (
-            <input 
-              type="number" 
-              min="2020" max="2100"
-              value={filterValue.substring(0, 4)}
-              onChange={(e) => setFilterValue(e.target.value + "-01-01")}
-              className="w-full sm:w-auto p-3 bg-muted border border-border rounded-xl font-bold text-lg text-foreground focus:ring-2 focus:ring-slate-500 outline-none"
-            />
+            <div className="relative flex items-center">
+              <Calendar className="w-4 h-4 text-slate-400 absolute left-3 pointer-events-none" />
+              <input 
+                type="number" 
+                min="2020" max="2100"
+                value={filterValue.substring(0, 4)}
+                onChange={(e) => setFilterValue(e.target.value + "-01-01")}
+                className="w-full sm:w-32 pl-9 pr-4 py-2 bg-slate-950/80 border border-slate-800 rounded-2xl font-bold text-sm text-slate-100 focus:ring-2 focus:ring-rose-500/50 focus:border-rose-500 outline-none transition-all shadow-inner font-mono"
+              />
+            </div>
           )}
         </div>
-        <div className="flex gap-2 w-full sm:w-auto">
+
+        {/* Right: High-Impact Action Buttons */}
+        <div className="flex items-center gap-2.5 w-full sm:w-auto relative z-10">
           <button 
             onClick={() => setShowAddModal(true)}
-            className="flex-1 sm:flex-none px-4 py-2 bg-rose-500 hover:bg-rose-600 text-white rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-colors"
+            className="flex-1 sm:flex-none px-5 py-2.5 bg-gradient-to-r from-rose-500 via-pink-600 to-amber-500 hover:from-rose-600 hover:to-amber-600 text-white rounded-2xl text-xs font-black flex items-center justify-center gap-2 shadow-lg shadow-rose-500/25 active:scale-95 transition-all"
           >
-            <Plus size={18} /> Add Deposits
+            <Plus size={16} className="stroke-[3]" />
+            <span>Add Deposits</span>
           </button>
+          
           <button 
             onClick={() => setShowExportModal(true)}
-            className="flex-1 sm:flex-none px-4 py-2 border border-border rounded-lg text-sm font-bold hover:bg-muted text-foreground flex items-center justify-center gap-2"
+            className="flex-1 sm:flex-none px-4 py-2.5 bg-slate-800/60 hover:bg-slate-800 text-slate-200 border border-slate-700/80 hover:border-slate-600 rounded-2xl text-xs font-bold flex items-center justify-center gap-2 active:scale-95 transition-all shadow-sm"
           >
-            <Download size={18} /> Export
+            <FileSpreadsheet size={15} className="text-emerald-400" />
+            <span>Export</span>
           </button>
         </div>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-sky-50 dark:bg-sky-900/20 p-5 rounded-2xl border border-sky-100 dark:border-sky-800">
-          <p className="text-xs font-bold text-sky-600/70 dark:text-sky-400/70 mb-1">Total Deposited</p>
-          <p className="text-2xl font-black text-sky-700 dark:text-sky-300">EGP {formatMoney(totalDeposited)}</p>
-          <p className="text-xs font-semibold text-sky-600/60 dark:text-sky-400/60 mt-1">{deposits.length} transactions</p>
+      {/* 2. Executive Financial KPI Cards (4 Metrics) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        
+        {/* Total Deposited */}
+        <div className="relative group bg-gradient-to-br from-slate-900/90 via-slate-900/70 to-cyan-950/30 border border-slate-800/90 hover:border-cyan-500/40 p-5 rounded-3xl shadow-xl transition-all duration-300 overflow-hidden">
+          <div className="absolute -top-6 -right-6 w-24 h-24 bg-cyan-500/10 rounded-full blur-2xl group-hover:bg-cyan-500/20 transition-all pointer-events-none" />
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">Total Deposited</span>
+            <div className="w-9 h-9 rounded-xl bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shadow-inner">
+              <Wallet className="w-4 h-4" />
+            </div>
+          </div>
+          <p className="text-2xl sm:text-3xl font-black text-white font-mono tracking-tight">
+            EGP {formatMoney(totalDeposited)}
+          </p>
+          <div className="mt-2.5 flex items-center gap-2">
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+              {deposits.length} transactions
+            </span>
+            <span className="text-[11px] text-slate-500 font-medium">Recorded transfers</span>
+          </div>
         </div>
-        <div className="bg-blue-50 dark:bg-blue-900/20 p-5 rounded-2xl border border-blue-100 dark:border-blue-800">
-          <p className="text-xs font-bold text-blue-600/70 dark:text-blue-400/70 mb-1">Average Deposit</p>
-          <p className="text-2xl font-black text-blue-700 dark:text-blue-300">EGP {formatMoney(avgDeposit)}</p>
-          <p className="text-xs font-semibold text-blue-600/60 dark:text-blue-400/60 mt-1">per transaction</p>
+
+        {/* Average Deposit */}
+        <div className="relative group bg-gradient-to-br from-slate-900/90 via-slate-900/70 to-indigo-950/30 border border-slate-800/90 hover:border-indigo-500/40 p-5 rounded-3xl shadow-xl transition-all duration-300 overflow-hidden">
+          <div className="absolute -top-6 -right-6 w-24 h-24 bg-indigo-500/10 rounded-full blur-2xl group-hover:bg-indigo-500/20 transition-all pointer-events-none" />
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">Average Deposit</span>
+            <div className="w-9 h-9 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shadow-inner">
+              <TrendingUp className="w-4 h-4" />
+            </div>
+          </div>
+          <p className="text-2xl sm:text-3xl font-black text-white font-mono tracking-tight">
+            EGP {formatMoney(avgDeposit)}
+          </p>
+          <div className="mt-2.5 flex items-center gap-2">
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+              Mean value
+            </span>
+            <span className="text-[11px] text-slate-500 font-medium">Per transfer operation</span>
+          </div>
         </div>
-        <div className="bg-purple-50 dark:bg-purple-900/20 p-5 rounded-2xl border border-purple-100 dark:border-purple-800">
-          <p className="text-xs font-bold text-purple-600/70 dark:text-purple-400/70 mb-1">Largest</p>
-          <p className="text-2xl font-black text-purple-700 dark:text-purple-300">EGP {formatMoney(maxDeposit)}</p>
-          <p className="text-xs font-semibold text-purple-600/60 dark:text-purple-400/60 mt-1">single deposit</p>
+
+        {/* Largest Single Deposit */}
+        <div className="relative group bg-gradient-to-br from-slate-900/90 via-slate-900/70 to-fuchsia-950/30 border border-slate-800/90 hover:border-fuchsia-500/40 p-5 rounded-3xl shadow-xl transition-all duration-300 overflow-hidden">
+          <div className="absolute -top-6 -right-6 w-24 h-24 bg-fuchsia-500/10 rounded-full blur-2xl group-hover:bg-fuchsia-500/20 transition-all pointer-events-none" />
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">Largest Deposit</span>
+            <div className="w-9 h-9 rounded-xl bg-fuchsia-500/15 border border-fuchsia-500/30 flex items-center justify-center text-fuchsia-400 shadow-inner">
+              <Sparkles className="w-4 h-4" />
+            </div>
+          </div>
+          <p className="text-2xl sm:text-3xl font-black text-white font-mono tracking-tight">
+            EGP {formatMoney(maxDeposit)}
+          </p>
+          <div className="mt-2.5 flex items-center gap-2">
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-fuchsia-500/10 text-fuchsia-400 border border-fuchsia-500/20">
+              Peak liquidity
+            </span>
+            <span className="text-[11px] text-slate-500 font-medium">Single transaction ceiling</span>
+          </div>
         </div>
-        <div className="bg-amber-50 dark:bg-amber-900/20 p-5 rounded-2xl border border-amber-100 dark:border-amber-800">
-          <p className="text-xs font-bold text-amber-600/70 dark:text-amber-400/70 mb-1">Flow Types</p>
-          <p className="text-2xl font-black text-amber-700 dark:text-amber-300">{uniqueFlows.length}</p>
-          <p className="text-xs font-semibold text-amber-600/60 dark:text-amber-400/60 mt-1">active paths</p>
+
+        {/* Active Capital Routes */}
+        <div className="relative group bg-gradient-to-br from-slate-900/90 via-slate-900/70 to-amber-950/30 border border-slate-800/90 hover:border-amber-500/40 p-5 rounded-3xl shadow-xl transition-all duration-300 overflow-hidden">
+          <div className="absolute -top-6 -right-6 w-24 h-24 bg-amber-500/10 rounded-full blur-2xl group-hover:bg-amber-500/20 transition-all pointer-events-none" />
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-[11px] font-black uppercase tracking-wider text-slate-400">Active Flow Types</span>
+            <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shadow-inner">
+              <Layers className="w-4 h-4" />
+            </div>
+          </div>
+          <p className="text-2xl sm:text-3xl font-black text-white font-mono tracking-tight">
+            {uniqueFlows.length}
+          </p>
+          <div className="mt-2.5 flex items-center gap-2">
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">
+              Capital routes
+            </span>
+            <span className="text-[11px] text-slate-500 font-medium">Internal routing paths</span>
+          </div>
         </div>
+
       </div>
 
-      {/* 👑 OWNER WITHDRAWAL & DISTRIBUTION BREAKDOWN BOX */}
+      {/* 3. 👑 OWNER CAPITAL DISTRIBUTION & WITHDRAWAL COMMAND CENTER */}
       {ownerSummary.length > 0 && (
-        <div className="bg-[#0A101D] border border-cyan-500/20 rounded-3xl p-6 shadow-xl relative overflow-hidden space-y-4">
-          <div className="absolute top-0 right-0 w-80 h-80 bg-cyan-500/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/3 pointer-events-none" />
+        <div className="relative bg-gradient-to-b from-slate-900/95 via-slate-900/80 to-slate-950 border border-amber-500/30 rounded-3xl p-6 shadow-2xl overflow-hidden space-y-5">
+          {/* Ambient Gold/Amber Glow */}
+          <div className="absolute top-0 right-0 w-96 h-96 bg-amber-500/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/4 pointer-events-none" />
+          <div className="absolute bottom-0 left-0 w-80 h-80 bg-rose-500/5 rounded-full blur-3xl pointer-events-none" />
 
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 border-b border-border/50 pb-4">
-            <div className="flex items-center gap-3">
-              <div className="p-3 bg-gradient-to-br from-amber-500/20 to-rose-500/20 rounded-2xl border border-amber-500/30">
-                <UserCheck className="w-6 h-6 text-amber-400" />
+          {/* Section Header */}
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-800/80 pb-5 relative z-10">
+            <div className="flex items-center gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-amber-500/20 to-rose-500/20 border border-amber-500/40 flex items-center justify-center text-amber-400 shadow-lg shadow-amber-500/10">
+                <Crown className="w-6 h-6" />
               </div>
               <div>
-                <h3 className="text-lg font-black text-white tracking-tight flex items-center gap-2">
-                  👑 Owner Received Breakdown
-                </h3>
-                <p className="text-xs text-muted-foreground font-medium">
-                  Aggregated money received by each owner from Bank & Safe
+                <div className="flex items-center gap-2">
+                  <h3 className="text-lg sm:text-xl font-black text-white tracking-tight">
+                    Owner Capital Distribution & Withdrawals
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                    VIP Stakeholders
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 font-medium mt-0.5">
+                  Aggregated money received by each corporate owner from Commercial Bank Accounts & Safe Vault
                 </p>
               </div>
             </div>
-            <div className="px-3.5 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-mono font-bold">
-              EGP {formatMoney(ownerSummary.reduce((acc, curr) => acc + curr.total, 0))} Total Distributed
+
+            {/* Total Distributed Metric Badge */}
+            <div className="px-4 py-2 rounded-2xl bg-gradient-to-r from-amber-500/15 to-rose-500/15 border border-amber-500/30 text-amber-300 text-xs sm:text-sm font-mono font-black flex items-center gap-2 shadow-inner">
+              <Coins className="w-4 h-4 text-amber-400" />
+              <span>EGP {formatMoney(totalOwnerDistributed)} Total Distributed</span>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pt-2">
-            {ownerSummary.map((owner) => (
-              <div
-                key={owner.displayName}
-                className="bg-card border border-border/80 rounded-2xl p-4 space-y-3 relative group hover:border-cyan-500/40 transition-all shadow-md"
-              >
-                <div className="flex justify-between items-start">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center font-black text-cyan-400 text-sm">
-                      {owner.displayName.replace(/^mr\.\s*/i, "").charAt(0).toUpperCase()}
-                    </div>
-                    <div>
-                      <h4 className="font-extrabold text-white text-base tracking-tight">{owner.displayName}</h4>
-                      <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">{owner.count} transactions</span>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block">Total Received</span>
-                    <span className="text-xl font-black text-emerald-400 font-mono">
-                      EGP {formatMoney(owner.total)}
-                    </span>
-                  </div>
-                </div>
+          {/* Owner Cards Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 pt-1 relative z-10">
+            {ownerSummary.map((owner) => {
+              const sharePercent = totalOwnerDistributed > 0 ? (owner.total / totalOwnerDistributed) * 100 : 0;
+              return (
+                <div
+                  key={owner.displayName}
+                  className="bg-slate-950/80 border border-slate-800/90 hover:border-amber-500/50 rounded-2xl p-4 space-y-3.5 relative group transition-all duration-300 shadow-lg hover:shadow-amber-500/5 flex flex-col justify-between"
+                >
+                  <div>
+                    {/* Top row: Avatar, Name & Total */}
+                    <div className="flex justify-between items-start">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-500/20 to-cyan-500/20 border border-amber-500/30 flex items-center justify-center font-black text-amber-300 text-sm shadow-inner">
+                          {owner.displayName.replace(/^mr\.\s*/i, "").charAt(0).toUpperCase()}
+                        </div>
+                        <div>
+                          <h4 className="font-black text-white text-sm tracking-tight flex items-center gap-1">
+                            <span>{owner.displayName}</span>
+                          </h4>
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mt-0.5">
+                            {owner.count} {owner.count === 1 ? 'transaction' : 'transactions'}
+                          </span>
+                        </div>
+                      </div>
 
-                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-border/40 text-xs">
-                  <div className="bg-muted/40 p-2.5 rounded-xl border border-border/50">
-                    <span className="text-[10px] font-bold text-sky-400 uppercase tracking-wider flex items-center gap-1 mb-0.5">
-                      🏦 From Bank
-                    </span>
-                    <span className="font-mono font-bold text-white text-sm">
-                      EGP {formatMoney(owner.fromBank)}
-                    </span>
+                      <div className="text-right">
+                        <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block">Received</span>
+                        <span className="text-base sm:text-lg font-black text-emerald-400 font-mono">
+                          EGP {formatMoney(owner.total)}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Progress Bar (% of Total Distributed) */}
+                    <div className="mt-3 space-y-1">
+                      <div className="flex justify-between items-center text-[10px] font-bold text-slate-400">
+                        <span>Distribution Share</span>
+                        <span className="text-amber-400 font-mono">{sharePercent.toFixed(1)}%</span>
+                      </div>
+                      <div className="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden border border-slate-800">
+                        <div 
+                          className="h-full bg-gradient-to-r from-amber-500 to-rose-500 rounded-full transition-all duration-500"
+                          style={{ width: `${Math.min(100, Math.max(5, sharePercent))}%` }}
+                        />
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="bg-muted/40 p-2.5 rounded-xl border border-border/50">
-                    <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1 mb-0.5">
-                      🔐 From Safe
-                    </span>
-                    <span className="font-mono font-bold text-white text-sm">
-                      EGP {formatMoney(owner.fromSafe)}
-                    </span>
+                  {/* Split Sources: Bank vs Safe */}
+                  <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800/80 text-xs">
+                    <div className="bg-slate-900/80 p-2 rounded-xl border border-slate-800 flex flex-col">
+                      <span className="text-[9.5px] font-bold text-sky-400 uppercase tracking-wider flex items-center gap-1 mb-0.5">
+                        <Building2 className="w-3 h-3 text-sky-400" /> Bank
+                      </span>
+                      <span className="font-mono font-bold text-white text-xs truncate">
+                        EGP {formatMoney(owner.fromBank)}
+                      </span>
+                    </div>
+
+                    <div className="bg-slate-900/80 p-2 rounded-xl border border-slate-800 flex flex-col">
+                      <span className="text-[9.5px] font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1 mb-0.5">
+                        <Vault className="w-3 h-3 text-amber-400" /> Safe
+                      </span>
+                      <span className="font-mono font-bold text-white text-xs truncate">
+                        EGP {formatMoney(owner.fromSafe)}
+                      </span>
+                    </div>
                   </div>
+
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
 
-      {/* Flow Summary Badges */}
+      {/* 4. Active Capital Flow Stream Tags */}
       {uniqueFlows.length > 0 && (
-        <div className="flex items-center gap-3 text-sm font-bold">
-          <span className="text-slate-500">All Flows ({deposits.length})</span>
+        <div className="flex flex-wrap items-center gap-2.5 p-3 bg-slate-900/50 backdrop-blur-md border border-slate-800/80 rounded-2xl">
+          <span className="text-xs font-black uppercase tracking-wider text-slate-400 flex items-center gap-1.5 px-2">
+            <Layers className="w-3.5 h-3.5 text-rose-500" />
+            <span>Active Streams ({deposits.length}):</span>
+          </span>
           {uniqueFlows.map((flow, idx) => (
-            <div key={idx} className="flex items-center gap-2 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-lg text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
-              {getEntityIcon(flow.from, 14)} <ArrowRight size={14} /> {getEntityIcon(flow.to, 14)} 
-              <span className="ml-1 text-slate-900 dark:text-slate-100">{flow.count}</span>
+            <div 
+              key={idx} 
+              className="flex items-center gap-2 bg-slate-950/80 hover:bg-slate-950 px-3 py-1.5 rounded-xl text-slate-300 border border-slate-800 hover:border-slate-700 transition-all text-xs font-semibold shadow-xs"
+            >
+              <span className="capitalize text-slate-200 flex items-center gap-1">
+                {getEntityIcon(flow.from, 13)}
+                <span>{getEntityName(flow.from)}</span>
+              </span>
+              <ArrowRight size={12} className="text-rose-500" />
+              <span className="capitalize text-slate-200 flex items-center gap-1">
+                {getEntityIcon(flow.to, 13)}
+                <span>{getEntityName(flow.to)}</span>
+              </span>
+              <span className="px-1.5 py-0.2 rounded-md bg-rose-500/20 text-rose-400 font-mono text-[10px] font-black border border-rose-500/30">
+                {flow.count}
+              </span>
             </div>
           ))}
         </div>
       )}
 
-      {/* Data Table Container */}
-      <div className="bg-card border border-border shadow-sm rounded-2xl overflow-hidden">
-        {/* Desktop Table View */}
+      {/* 5. Executive Liquidity Ledger & Transactions Table */}
+      <div className="bg-slate-900/80 backdrop-blur-xl border border-slate-800/90 shadow-2xl rounded-3xl overflow-hidden">
+        
+        {/* Table View (Desktop) */}
         <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left border-collapse">
             <thead>
-              <tr className="bg-muted/50 border-b border-border">
-                <th className="p-4 font-bold text-sm text-foreground">Date</th>
-                <th className="p-4 font-bold text-sm text-foreground">Flow</th>
-                <th className="p-4 font-bold text-sm text-foreground">From</th>
-                <th className="p-4 font-bold text-sm text-foreground">To</th>
-                <th className="p-4 font-bold text-sm text-foreground text-right">Amount</th>
-                <th className="p-4 font-bold text-sm text-foreground">Note</th>
-                <th className="p-4 font-bold text-sm text-foreground text-center">Action</th>
+              <tr className="bg-slate-950/90 border-b border-slate-800 text-[11px] font-black uppercase tracking-wider text-slate-400">
+                <th className="p-4">Transaction Date</th>
+                <th className="p-4">Transfer Channel</th>
+                <th className="p-4">Origin Source</th>
+                <th className="p-4">Destination</th>
+                <th className="p-4 text-right">Amount (EGP)</th>
+                <th className="p-4">Remarks & Stakeholder</th>
+                <th className="p-4 text-center">Actions</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="divide-y divide-slate-800/60 text-sm">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="p-8 text-center text-slate-500">
-                    <Loader2 className="h-6 w-6 animate-spin mx-auto" />
+                  <td colSpan={7} className="p-12 text-center text-slate-400">
+                    <Loader2 className="h-7 w-7 animate-spin mx-auto text-rose-500 mb-2" />
+                    <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Loading deposits ledger...</span>
                   </td>
                 </tr>
               ) : deposits.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="p-8 text-center text-slate-500 font-medium">
-                    No deposits found for this month.
+                  <td colSpan={7} className="p-12 text-center text-slate-500">
+                    <Vault className="w-8 h-8 mx-auto mb-2 text-slate-600 opacity-50" />
+                    <p className="font-bold text-sm text-slate-300">No deposits recorded for this timeframe.</p>
+                    <p className="text-xs text-slate-500 mt-0.5">Click "+ Add Deposits" above to log a new capital movement.</p>
                   </td>
                 </tr>
               ) : (
                 deposits.map((deposit) => (
-                  <tr key={deposit.id} className="border-b border-border/50 hover:bg-muted/20 transition-colors">
-                    <td className="p-4 font-semibold text-sm">{deposit.date}</td>
-                    <td className="p-4">
-                      <div className="flex items-center gap-2 text-slate-500">
-                        {getEntityIcon(deposit.from)}
-                        <ArrowRight size={14} />
-                        {getEntityIcon(deposit.to)}
+                  <tr 
+                    key={deposit.id} 
+                    className="hover:bg-slate-800/30 transition-colors group"
+                  >
+                    {/* Date */}
+                    <td className="p-4 font-mono font-bold text-xs text-slate-200">
+                      <div className="flex items-center gap-2">
+                        <Calendar className="w-3.5 h-3.5 text-slate-500" />
+                        <span>{deposit.date}</span>
                       </div>
                     </td>
-                    <td className="p-4 font-bold capitalize">{getEntityName(deposit.from)}</td>
-                    <td className="p-4 font-bold capitalize">{getEntityName(deposit.to)}</td>
-                    <td className="p-4 text-right font-black text-slate-900 dark:text-slate-50">EGP {formatMoney(deposit.amount)}</td>
-                    <td className="p-4 text-sm text-slate-500">
-                      {deposit.note}
-                      {deposit.ownerName && <div className="text-xs font-bold text-slate-400 mt-1">Owner: {deposit.ownerName}</div>}
+
+                    {/* Flow Badge */}
+                    <td className="p-4">
+                      <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-slate-950/80 border border-slate-800 text-xs font-semibold text-slate-300">
+                        {getEntityIcon(deposit.from, 13)}
+                        <ArrowRight size={11} className="text-rose-500" />
+                        {getEntityIcon(deposit.to, 13)}
+                      </div>
                     </td>
+
+                    {/* From */}
+                    <td className="p-4 font-bold capitalize text-slate-200 text-xs">
+                      <span className="px-2 py-0.5 rounded-lg bg-slate-800/60 border border-slate-700/50">
+                        {getEntityName(deposit.from)}
+                      </span>
+                    </td>
+
+                    {/* To */}
+                    <td className="p-4 font-bold capitalize text-slate-200 text-xs">
+                      <span className="px-2 py-0.5 rounded-lg bg-slate-800/60 border border-slate-700/50">
+                        {getEntityName(deposit.to)}
+                      </span>
+                    </td>
+
+                    {/* Amount */}
+                    <td className="p-4 text-right font-black text-emerald-400 font-mono text-base">
+                      EGP {formatMoney(deposit.amount)}
+                    </td>
+
+                    {/* Note & Owner */}
+                    <td className="p-4 text-xs text-slate-300 max-w-xs truncate">
+                      {deposit.ownerName ? (
+                        <div className="flex items-center gap-1.5">
+                          <span className="px-2 py-0.5 rounded-lg bg-amber-500/15 text-amber-300 font-bold border border-amber-500/30 inline-flex items-center gap-1">
+                            <Crown className="w-3 h-3 text-amber-400" />
+                            <span>{deposit.ownerName}</span>
+                          </span>
+                          {deposit.note && <span className="text-slate-400 truncate">• {deposit.note}</span>}
+                        </div>
+                      ) : (
+                        <span>{deposit.note || <span className="text-slate-600 italic">No notes</span>}</span>
+                      )}
+                    </td>
+
+                    {/* Actions */}
                     <td className="p-4 text-center">
-                      <div className="flex items-center justify-center gap-1">
+                      <div className="flex items-center justify-center gap-1.5">
                         <button 
                           onClick={() => {
                             setSelectedDepositForPrint(deposit);
                             setTimeout(() => generatePDF(), 500);
                           }}
-                          className="p-2 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors"
+                          className="p-2 text-cyan-400 hover:text-white bg-cyan-500/10 hover:bg-cyan-500 border border-cyan-500/20 rounded-xl transition-all shadow-xs"
+                          title="Print Official Deposit Voucher"
                         >
-                          <Printer size={18} />
+                          <Printer size={15} />
                         </button>
+                        
                         {!(typeof window !== "undefined" && localStorage.getItem("circlek_role") === "manager") && (
                           <button 
                             onClick={() => handleDelete(deposit.id)}
-                            className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                            className="p-2 text-rose-400 hover:text-white bg-rose-500/10 hover:bg-rose-500 border border-rose-500/20 rounded-xl transition-all shadow-xs"
+                            title="Delete Record"
                           >
-                            <Trash2 size={18} />
+                            <Trash2 size={15} />
                           </button>
                         )}
                       </div>
                     </td>
+
                   </tr>
                 ))
               )}
@@ -624,30 +834,30 @@ export default function DepositsPage() {
           </table>
         </div>
 
-        {/* Mobile Card List View (Strictly md:hidden) */}
+        {/* Mobile Cards View (Strictly md:hidden) */}
         <div className="md:hidden p-3 space-y-3">
           {loading ? (
             <div className="p-8 text-center text-slate-400">
-              <Loader2 className="w-6 h-6 animate-spin mx-auto" />
+              <Loader2 className="w-6 h-6 animate-spin mx-auto text-rose-500" />
             </div>
           ) : deposits.length === 0 ? (
-            <div className="p-6 text-center text-slate-400 text-xs rounded-xl bg-[#0B1121] border border-[rgba(34,211,238,0.15)]">
+            <div className="p-6 text-center text-slate-400 text-xs rounded-2xl bg-slate-950 border border-slate-800">
               No deposits recorded for this period.
             </div>
           ) : (
             deposits.map((deposit) => (
               <div
                 key={deposit.id}
-                className="p-4 rounded-2xl bg-[#0B1121] border border-[rgba(34,211,238,0.15)] shadow-lg space-y-3"
+                className="p-4 rounded-2xl bg-slate-950/90 border border-slate-800 shadow-xl space-y-3"
               >
                 <div className="flex items-start justify-between">
                   <div>
-                    <div className="flex items-center gap-2 text-xs font-extrabold text-cyan-400">
+                    <div className="flex items-center gap-2 text-xs font-black text-slate-200">
                       <span>{getEntityName(deposit.from)}</span>
-                      <ArrowRight size={12} className="text-slate-400" />
+                      <ArrowRight size={12} className="text-rose-500" />
                       <span>{getEntityName(deposit.to)}</span>
                     </div>
-                    <p className="text-[11px] text-slate-400 font-mono mt-0.5">{deposit.date}</p>
+                    <p className="text-[11px] text-slate-500 font-mono mt-0.5">{deposit.date}</p>
                   </div>
                   <span className="text-base font-black font-mono text-emerald-400">
                     EGP {formatMoney(deposit.amount)}
@@ -655,138 +865,192 @@ export default function DepositsPage() {
                 </div>
 
                 {deposit.note && (
-                  <p className="text-xs text-slate-300 bg-[#0F172A] p-2 rounded-xl border border-[rgba(34,211,238,0.1)]">
+                  <p className="text-xs text-slate-300 bg-slate-900 p-2.5 rounded-xl border border-slate-800">
                     {deposit.note}
                   </p>
                 )}
 
-                <div className="flex items-center justify-between border-t border-[#1E293B] pt-2">
-                  <span className="text-[10px] text-slate-400">
-                    {deposit.ownerName ? `Owner: ${deposit.ownerName}` : "System Transfer"}
+                <div className="flex items-center justify-between border-t border-slate-800 pt-2.5">
+                  <span className="text-[11px] text-slate-400 font-bold">
+                    {deposit.ownerName ? (
+                      <span className="text-amber-400 flex items-center gap-1">
+                        <Crown className="w-3 h-3" /> {deposit.ownerName}
+                      </span>
+                    ) : (
+                      "Internal Transfer"
+                    )}
                   </span>
-                  <button
-                    onClick={() => {
-                      setSelectedDepositForPrint(deposit);
-                      setTimeout(() => generatePDF(), 500);
-                    }}
-                    className="px-3 py-1.5 rounded-xl bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 font-extrabold text-xs flex items-center gap-1.5 active:scale-95 transition-transform"
-                  >
-                    <Printer className="w-3.5 h-3.5" /> Voucher
-                  </button>
+                  
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        setSelectedDepositForPrint(deposit);
+                        setTimeout(() => generatePDF(), 500);
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 font-bold text-xs flex items-center gap-1.5 active:scale-95 transition-transform"
+                    >
+                      <Printer className="w-3.5 h-3.5" /> Voucher
+                    </button>
+                    {!(typeof window !== "undefined" && localStorage.getItem("circlek_role") === "manager") && (
+                      <button
+                        onClick={() => handleDelete(deposit.id)}
+                        className="p-1.5 text-rose-400 hover:text-white bg-rose-500/10 rounded-xl border border-rose-500/20"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             ))
           )}
         </div>
+
       </div>
 
-      {/* Add Modal */}
+      {/* 6. Executive Add Deposit Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-card w-full max-w-md rounded-3xl shadow-2xl overflow-hidden border border-border">
-            <div className="p-6 border-b border-border flex justify-between items-center bg-muted/50">
-              <h2 className="text-xl font-black text-foreground">Add deposits</h2>
-              <button onClick={() => setShowAddModal(false)} className="text-slate-400 hover:text-slate-600 transition-colors">
-                <X size={24} />
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-800 w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden">
+            
+            {/* Modal Header */}
+            <div className="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-950/80">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-rose-500/20 to-amber-500/20 border border-rose-500/30 flex items-center justify-center text-rose-400 shadow-inner">
+                  <Vault className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-black text-white">Record Capital Deposit</h2>
+                  <p className="text-xs text-slate-400">Log transfer between Safe, Bank, or Stakeholder</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowAddModal(false)} 
+                className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-colors"
+              >
+                <X size={20} />
               </button>
             </div>
+
+            {/* Modal Form */}
             <form onSubmit={handleAddDeposit} className="p-6 space-y-4">
+              
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1">Date *</label>
+                  <label className="block text-xs font-black uppercase tracking-wider text-slate-400 mb-1.5">
+                    Deposit Date *
+                  </label>
                   <input 
                     type="date"
                     required
                     value={newDeposit.date}
                     onChange={e => setNewDeposit({...newDeposit, date: e.target.value})}
-                    className="w-full p-3 bg-muted border border-border rounded-xl outline-none focus:ring-2 focus:ring-rose-500 font-semibold"
+                    className="w-full p-3 bg-slate-950 border border-slate-800 rounded-2xl outline-none focus:ring-2 focus:ring-rose-500 font-bold text-white text-sm"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1">Amount *</label>
+                  <label className="block text-xs font-black uppercase tracking-wider text-slate-400 mb-1.5">
+                    Amount (EGP) *
+                  </label>
                   <input 
                     type="number"
                     required
                     min="0"
                     step="0.01"
+                    placeholder="0.00"
                     value={newDeposit.amount}
                     onChange={e => setNewDeposit({...newDeposit, amount: e.target.value})}
-                    className="w-full p-3 bg-muted border border-border rounded-xl outline-none focus:ring-2 focus:ring-rose-500 font-bold"
+                    className="w-full p-3 bg-slate-950 border border-slate-800 rounded-2xl outline-none focus:ring-2 focus:ring-rose-500 font-black text-emerald-400 text-sm font-mono"
                   />
                 </div>
               </div>
 
+              {/* Source & Destination */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1">From *</label>
+                  <label className="block text-xs font-black uppercase tracking-wider text-slate-400 mb-1.5">
+                    Transfer From *
+                  </label>
                   <select 
                     value={newDeposit.from}
                     onChange={e => setNewDeposit({...newDeposit, from: e.target.value})}
-                    className="w-full p-3 bg-muted border border-border rounded-xl outline-none focus:ring-2 focus:ring-rose-500 font-semibold capitalize"
+                    className="w-full p-3 bg-slate-950 border border-slate-800 rounded-2xl outline-none focus:ring-2 focus:ring-rose-500 font-bold text-white text-sm capitalize"
                   >
-                    <option value="safe">Safe</option>
-                    <option value="owner">Owner</option>
-                    <option value="bank">Bank</option>
+                    <option value="safe">Vault Safe</option>
+                    <option value="owner">Corporate Owner</option>
+                    <option value="bank">Commercial Bank</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1">To *</label>
+                  <label className="block text-xs font-black uppercase tracking-wider text-slate-400 mb-1.5">
+                    Transfer To *
+                  </label>
                   <select 
                     value={newDeposit.to}
                     onChange={e => setNewDeposit({...newDeposit, to: e.target.value})}
-                    className="w-full p-3 bg-muted border border-border rounded-xl outline-none focus:ring-2 focus:ring-rose-500 font-semibold capitalize"
+                    className="w-full p-3 bg-slate-950 border border-slate-800 rounded-2xl outline-none focus:ring-2 focus:ring-rose-500 font-bold text-white text-sm capitalize"
                   >
-                    <option value="safe">Safe</option>
-                    <option value="owner">Owner</option>
-                    <option value="bank">Bank</option>
+                    <option value="bank">Commercial Bank</option>
+                    <option value="owner">Corporate Owner</option>
+                    <option value="safe">Vault Safe</option>
                   </select>
                 </div>
               </div>
 
+              {/* Owner Name field */}
               {(newDeposit.from === "owner" || newDeposit.to === "owner") && (
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1">Owner Name *</label>
+                <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl space-y-1">
+                  <label className="block text-xs font-black uppercase tracking-wider text-amber-300">
+                    Stakeholder / Owner Name *
+                  </label>
                   <input 
                     type="text"
                     required
+                    placeholder="e.g. Mr. Hesham, Mr. Ashraf, Mr. Youssef"
                     value={newDeposit.ownerName}
                     onChange={e => setNewDeposit({...newDeposit, ownerName: e.target.value})}
-                    className="w-full p-3 bg-muted border border-border rounded-xl outline-none focus:ring-2 focus:ring-rose-500 font-bold"
+                    className="w-full p-2.5 bg-slate-950 border border-slate-800 rounded-xl outline-none focus:ring-2 focus:ring-amber-500 font-bold text-white text-sm"
                   />
                 </div>
               )}
 
+              {/* Notes */}
               <div>
-                <label className="block text-xs font-bold text-slate-500 mb-1">Note</label>
+                <label className="block text-xs font-black uppercase tracking-wider text-slate-400 mb-1.5">
+                  Remarks / Purpose
+                </label>
                 <textarea 
+                  placeholder="Additional reference, cheque number, or notes..."
                   value={newDeposit.note}
                   onChange={e => setNewDeposit({...newDeposit, note: e.target.value})}
-                  className="w-full p-3 bg-muted border border-border rounded-xl outline-none focus:ring-2 focus:ring-rose-500 min-h-[100px] resize-none text-sm"
+                  className="w-full p-3 bg-slate-950 border border-slate-800 rounded-2xl outline-none focus:ring-2 focus:ring-rose-500 min-h-[90px] resize-none text-sm text-slate-200"
                 />
               </div>
 
-              <div className="flex justify-end gap-3 pt-4 border-t border-border">
+              {/* Modal Buttons */}
+              <div className="flex justify-end gap-3 pt-4 border-t border-slate-800">
                 <button 
                   type="button"
                   onClick={() => setShowAddModal(false)}
-                  className="px-6 py-2.5 rounded-xl font-bold text-slate-600 hover:bg-slate-100 transition-colors"
+                  className="px-5 py-2.5 rounded-xl font-bold text-slate-400 hover:text-white hover:bg-slate-800 transition-colors text-sm"
                 >
                   Cancel
                 </button>
                 <button 
                   type="submit"
                   disabled={isSubmitting}
-                  className="px-6 py-2.5 rounded-xl font-bold text-white bg-rose-500 hover:bg-rose-600 disabled:opacity-50 transition-colors flex items-center gap-2"
+                  className="px-6 py-2.5 rounded-xl font-black text-white bg-gradient-to-r from-rose-500 to-amber-500 hover:from-rose-600 hover:to-amber-600 shadow-lg shadow-rose-500/25 disabled:opacity-50 transition-all flex items-center gap-2 text-sm active:scale-95"
                 >
-                  {isSubmitting ? <Loader2 size={18} className="animate-spin" /> : "Save Deposit"}
+                  {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : "Save & Generate Voucher"}
                 </button>
               </div>
+
             </form>
           </div>
         </div>
       )}
 
-      {/* Hidden Print Receipt container */}
+      {/* 7. Hidden Print Receipt Container (Preserved Exact Structure) */}
       {selectedDepositForPrint && (
         <div id="single-deposit-print-wrapper" style={{ position: 'fixed', left: '-9999px', top: 0, zIndex: -9999, pointerEvents: 'none' }}>
           <div 
@@ -876,6 +1140,7 @@ export default function DepositsPage() {
           </div>
         </div>
       )}
+
       {/* Export Modal */}
       <ExportFinancialsModal
         isOpen={showExportModal}

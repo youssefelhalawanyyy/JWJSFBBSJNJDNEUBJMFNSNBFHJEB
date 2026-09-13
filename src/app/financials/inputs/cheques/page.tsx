@@ -77,6 +77,305 @@ function numberToArabicWords(num: number): string {
   return result + " جنيه مصري لا غير";
 }
 
+// Branch Corporate Metadata for Egyptian Commercial Law
+export const getBranchLegalMetadata = (storeId?: string, currentBranch?: string) => {
+  const s = (storeId || currentBranch || "").toLowerCase();
+  const isOla = s.includes("ola") || s.includes("koronfol");
+  if (isOla) {
+    return {
+      companyNameAr: "شركة ايه ان اتش للتجارة (ش.م.م)",
+      companyNameEn: "ANH For Trading S.A.E",
+      branchTitleAr: "فرع أولا القرنفل - التجمع الخامس (توكيل سيركل كي)",
+      taxId: "756-563-844",
+      commReg: "216727",
+      address: "شارع التسعين الشمالي، كمبوند القرنفل، التجمع الخامس، القاهرة الجديدة",
+      managerTitle: "المدير المالي / مدير الفرع"
+    };
+  }
+  return {
+    companyNameAr: "الشركة المصرية للتجارة والتوكيلات (ش.م.م)",
+    companyNameEn: "El Masreya for Trade - Circle K Franchise",
+    branchTitleAr: "فرع العلمين 4 - مارينا الساحل الشمالي (توكيل سيركل كي)",
+    taxId: "123-456-789",
+    commReg: "123456",
+    address: "طريق الإسكندرية - مطروح الساحلي، أمام بوابة مارينا 4، العلمين",
+    managerTitle: "المدير المالي / مدير الفرع"
+  };
+};
+
+export function LegalGuaranteeSlipContent({
+  selectedForPrint,
+  getBranchLegalInfo,
+  numberToArabicWords,
+  isPrint = false,
+}: {
+  selectedForPrint: any;
+  getBranchLegalInfo?: (storeId?: string) => any;
+  numberToArabicWords: (num: number) => string;
+  isPrint?: boolean;
+}) {
+  if (!selectedForPrint) return null;
+
+  const branchInfo = getBranchLegalInfo 
+    ? getBranchLegalInfo(selectedForPrint.storeId) 
+    : getBranchLegalMetadata(selectedForPrint.storeId);
+
+  const amountNum = Number(selectedForPrint.amount || 0);
+  const tafqeet = numberToArabicWords(amountNum);
+  const creditLimitNum = selectedForPrint.creditLimit ? Number(selectedForPrint.creditLimit) : 0;
+
+  return (
+    <div 
+      className={`w-full bg-white text-black flex flex-col justify-between select-none box-border border-[2.5px] border-black p-3.5 ${
+        isPrint ? "h-[285mm] max-h-[285mm]" : "min-h-[1050px]"
+      }`}
+      style={{
+        boxSizing: "border-box",
+        fontFamily: "'Cairo', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
+      }}
+      dir="rtl"
+    >
+      <div className="border border-black p-3 h-full flex flex-col justify-between box-border">
+        
+        {/* 1. Official National & Corporate Header */}
+        <div className="shrink-0 border-b-2 border-black pb-2">
+          <div className="grid grid-cols-12 items-center gap-2">
+            
+            {/* Right: State & Entity */}
+            <div className="col-span-4 text-right space-y-0.5">
+              <p className="text-xs font-black text-black">جمهورية مصر العربية</p>
+              <p className="text-[9px] text-gray-700">وزارة التموين والتجارة الداخلية - مصلحة السجل التجاري</p>
+              <p className="text-[11px] font-bold text-black">{branchInfo.companyNameAr}</p>
+              <p className="text-[9.5px] text-gray-800">{branchInfo.branchTitleAr}</p>
+              <p className="text-[8.5px] text-gray-600 font-mono">
+                سجل تجاري: {branchInfo.commReg} | بطاقة ضريبية: {branchInfo.taxId}
+              </p>
+            </div>
+
+            {/* Center: Legal Deed Official Seal Emblem */}
+            <div className="col-span-4 flex flex-col items-center justify-center text-center">
+              <div className="border-2 border-black rounded-xl px-3 py-1 bg-gray-50 flex flex-col items-center justify-center shadow-xs w-full max-w-[210px]">
+                <div className="flex items-center gap-1.5 text-[10.5px] font-black text-black">
+                  <Scale className="w-3.5 h-3.5 text-black" />
+                  <span>سند تجاري وقانوني رسمي</span>
+                </div>
+                <span className="text-[10px] font-black text-rose-800 mt-0.5">
+                  سند استلام شيك ضمان بنكي مشروط
+                </span>
+                <span className="text-[7.5px] font-mono tracking-widest text-gray-600 uppercase">
+                  OFFICIAL GUARANTEE DEED
+                </span>
+              </div>
+              <p className="text-[8px] text-gray-600 mt-1 font-semibold">
+                توكيل سيركل كي مصر - الدائرة المالية
+              </p>
+            </div>
+
+            {/* Left: Metadata & QR Verification */}
+            <div className="col-span-4 flex items-center justify-end gap-2">
+              <div className="text-left text-[9px] font-mono leading-tight space-y-0.5">
+                <p className="font-bold text-black">
+                  REF: CHQ-{selectedForPrint.chequeNumber || selectedForPrint.id?.slice(0, 8)?.toUpperCase()}
+                </p>
+                <p className="text-gray-800">
+                  DATE: {selectedForPrint.chequeDate || new Date().toISOString().substring(0, 10)}
+                </p>
+                <p className="text-emerald-800 font-bold text-[8.5px]">
+                  TYPE: أمانة وضمان تجاري مقيد
+                </p>
+                <p className="text-[8px] text-gray-500">
+                  STATUS: ساري ومقيد بحساب
+                </p>
+              </div>
+              <div className="p-1 border border-black rounded bg-white shrink-0 shadow-xs">
+                <QRCode 
+                  value={`CHQ-${selectedForPrint.chequeNumber || selectedForPrint.id}-${selectedForPrint.amount}-${selectedForPrint.bankName}`} 
+                  size={44} 
+                />
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+        {/* 2. Official Deed Title Banner */}
+        <div className="shrink-0 my-1.5 border-2 border-black bg-gray-100 text-black py-1.5 px-3 rounded text-center shadow-xs">
+          <h1 className="text-xs font-black tracking-wide text-black">
+            إقرار وسند استلام شيك بنكي مسحوب على سبيل أمانة الضمان التجاري والائتماني
+          </h1>
+          <p className="text-[8.5px] font-bold text-gray-700 font-sans mt-0.5">
+            صادر وموثق طبقاً لأحكام قانون التجارة المصري رقم 17 لسنة 1999، والقانون المدني، والمادة 341 من قانون العقوبات
+          </p>
+        </div>
+
+        {/* 3. Contracting Parties Legal Identity Cards (Two Columns) */}
+        <div className="shrink-0 grid grid-cols-2 gap-2 text-[9.5px] leading-tight">
+          {/* First Party (Drawer) */}
+          <div className="border border-black rounded p-2 bg-gray-50/80">
+            <div className="font-black text-[10px] text-black border-b border-gray-300 pb-1 mb-1 flex items-center justify-between">
+              <span>الطرف الأول (الساحب / المدين الائتماني):</span>
+              <span className="text-[8px] bg-gray-200 px-1.5 py-0.2 rounded text-gray-800 font-bold">جهة التحرير</span>
+            </div>
+            <div className="space-y-0.5">
+              <p><strong>اسم المنشأة: </strong>{branchInfo.companyNameAr}</p>
+              <p><strong>الفرع والنشاط: </strong>{branchInfo.branchTitleAr}</p>
+              <p><strong>السجل التجاري: </strong><span className="font-mono font-bold">{branchInfo.commReg}</span> | <strong>البطاقة الضريبية: </strong><span className="font-mono font-bold">{branchInfo.taxId}</span></p>
+              <p><strong>المقر التجاري: </strong>{branchInfo.address}</p>
+              <p><strong>الممثل القانوني: </strong>{branchInfo.managerTitle}</p>
+            </div>
+          </div>
+
+          {/* Second Party (Beneficiary / Supplier) */}
+          <div className="border border-black rounded p-2 bg-gray-50/80">
+            <div className="font-black text-[10px] text-black border-b border-gray-300 pb-1 mb-1 flex items-center justify-between">
+              <span>الطرف الثاني (المستفيد / الدائن ومندوب الاستلام):</span>
+              <span className="text-[8px] bg-gray-200 px-1.5 py-0.2 rounded text-gray-800 font-bold">جهة الاستلام</span>
+            </div>
+            <div className="space-y-0.5">
+              <p><strong>الشركة المستفيدة (الموردة): </strong><span className="font-bold">{selectedForPrint.receiverCompanyName || "الشركة الموردة المعتمدة"}</span></p>
+              <p><strong>المندوب المستلم (رباعي): </strong><span className="font-bold">{selectedForPrint.receiverName || "مندوب التوريد المفوض"}</span></p>
+              <p><strong>الرقم القومي (14 رقماً): </strong><span className="font-mono font-bold tracking-wider">{selectedForPrint.nationalId || ".............................."}</span></p>
+              <p><strong>الصفة والتفويض: </strong>مندوب تسليم وتوريد مفوض باستلام الشيك والتحصيل</p>
+              <p className="truncate"><strong>ملاحظات التوريد: </strong>{selectedForPrint.notes || "تغطية توريدات البضائع بموجب أوامر التوريد المعتمدة"}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* 4. Cheque & Banking Guarantee Specifications Table */}
+        <div className="shrink-0 border-2 border-black rounded overflow-hidden text-[9.5px]">
+          <table className="w-full border-collapse">
+            <tbody>
+              <tr className="border-b border-black bg-gray-100">
+                <td className="p-1.5 border-l border-black font-bold text-gray-700 w-1/4">رقم الشيك البنكي:</td>
+                <td className="p-1.5 border-l border-black font-mono font-black text-sm text-black w-1/4">
+                  {selectedForPrint.chequeNumber}
+                </td>
+                <td className="p-1.5 border-l border-black font-bold text-gray-700 w-1/4">البنك المسحوب عليه:</td>
+                <td className="p-1.5 font-bold text-black w-1/4">
+                  {selectedForPrint.bankName}
+                </td>
+              </tr>
+              <tr className="border-b border-black">
+                <td className="p-1.5 border-l border-black font-bold text-gray-700">تاريخ تحرير الشيك:</td>
+                <td className="p-1.5 border-l border-black font-mono font-bold text-black">
+                  {selectedForPrint.chequeDate}
+                </td>
+                <td className="p-1.5 border-l border-black font-bold text-gray-700">قيمة الشيك بالأرقام:</td>
+                <td className="p-1.5 font-mono font-black text-sm text-black">
+                  EGP {amountNum.toLocaleString()} ج.م
+                </td>
+              </tr>
+              <tr className="border-b border-black bg-gray-50/60">
+                <td className="p-1.5 border-l border-black font-bold text-gray-700">الحد الائتماني المغطى:</td>
+                <td className="p-1.5 border-l border-black font-mono font-bold text-black">
+                  {creditLimitNum > 0 ? `EGP ${creditLimitNum.toLocaleString()} ج.م` : "حد التوريد الآجل المعتمد"}
+                </td>
+                <td className="p-1.5 border-l border-black font-bold text-gray-700">طبيعة وسند الشيك:</td>
+                <td className="p-1.5 font-bold text-rose-800">
+                  شيك أمانة وضمان تجاري مقيد (غير قابل للصرف الفوري)
+                </td>
+              </tr>
+              <tr className="bg-gray-100">
+                <td className="p-1.5 border-l border-black font-bold text-gray-700">المبلغ بالحروف والتفقيط:</td>
+                <td colSpan={3} className="p-1.5 font-black text-black text-[10px]">
+                  فقط وقدره {tafqeet}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        {/* 5. The 6 Strict Legal Articles */}
+        <div className="shrink-0 border border-black rounded p-2 text-[8px] leading-relaxed space-y-1 text-justify bg-white">
+          <p className="font-black text-[9px] text-black border-b border-gray-300 pb-0.5 flex items-center justify-between">
+            <span>البنود والشروط القانونية الحاكمة والمحكمة (وفقاً لأحكام قانون التجارة المصري رقم 17 لسنة 1999 والقانون المدني وقانون العقوبات):</span>
+            <span className="text-[7.5px] font-bold text-slate-500">سند أمانة وضمان قطعي</span>
+          </p>
+          <p>
+            <strong>المادة الأولى (صفة الأمانة والضمان الائتماني): </strong>
+            يقر الطرف الثاني (الشركة المستفيدة ومندوبها المفوض بالاستلام والتوقيع) بأن هذا الشيك البنكي قد سُلِّم إليه على سبيل <strong>الأمانة والوديعة والضمان والتأمين التجاري فقط</strong> لتغطية وتأمين الحد الائتماني الممنوح للطرف الأول لتوريد بضائع بالآجل، وأنه ليس شيكاً واجب الوفاء الفوري أو أداة سداد نقدي حال في تاريخه، ولا يمثل مديونية قائمة أو مستقلة بذاتها في ذمة الطرف الأول.
+          </p>
+          <p>
+            <strong>المادة الثانية (حظر التقديم البنكي أو التظهير أو نقل الملكية للغير): </strong>
+            يحظر حظراً باتاً وقاطعاً على الطرف الثاني تقديم هذا الشيك للبنك المسحوب عليه للصرف أو وضعه في غرفة المقاصة الإلكترونية أو تظهيره أو رهنه أو حوالة حقه لأي طرف ثالث، طالما أن التعامل التجاري بين الطرفين قائم ومستمر والطرف الأول منتظم في سداد فواتير البضائع المسلمة إليه طبقاً للمدد الائتمانية المقررة.
+          </p>
+          <p>
+            <strong>المادة الثالثة (قصر المطالبة على العجز الفعلي بعد الإعذار الرسمي ومطابقة الحسابات): </strong>
+            في حال حدوث أي توقف أو إخلال مثبت بالسداد من قبل الطرف الأول، يلتزم الطرف الثاني بإجراء مطابقة حسابية خطية وتوجيه إخطار كتابي رسمي بعلم الوصول للطرف الأول بمهلة سداد لا تقل عن 15 يوماً، ولا يجوز للطرف الثاني بأي حال من الأحوال المطالبة إلا بصافي قيمة العجز الفعلي للبضائع الموردة غير المسددة فقط بعد خصم كافة المرتجعات والدفعات النقدية والبنكية.
+          </p>
+          <p>
+            <strong>المادة الرابعة (الالتزام الفوري برد أصل الشيك وسقوط حجيته): </strong>
+            يلتزم الطرف الثاني برد وتسليم أصل هذا الشيك فوراً إلى الطرف الأول بمجرد انتهاء التعامل التجاري أو تقديم شيك ضمان بديل أو تصفية الحساب، ويُعد أي سداد بموجب إيصالات استلام أو تحويلات بنكية مسقطاً لأي التزام يغطيه هذا الشيك، ويعتبر الشيك لاغياً ومعدوم الأثر بمجرد الوفاء.
+          </p>
+          <p>
+            <strong>المادة الخامسة (المسؤولية الجنائية والمدنية وخيانة الأمانة طبقاً للمادة 341 عقوبات): </strong>
+            يقر الطرف الثاني بأن إيداع هذا الشيك لديه كان على سبيل الوديعة والأمانة لغرض الضمان الائتماني فقط، وأي استخدام أو تظهير أو صرف له خلافاً للغرض المخصص له يُعد جريمة خيانة أمانة واستعمال محرر في غير ما أُعد له معاقب عليها بنص المادة 341 من قانون العقوبات وقانون التجارة المصري رقم 17 لسنة 1999، ويتحمل المودع لديه المسؤولية الجنائية والمدنية والتعويض عن كافة الأضرار التجارية.
+          </p>
+          <p>
+            <strong>المادة السادسة (الاختصاص القضائي والقوة الثبوتية): </strong>
+            يُعد هذا السند حجة كتابية قطعية وملزمة لطرفيه وموقعيه، وتختص المحاكم الاقتصادية والتجارية بجمهورية مصر العربية بنظر أي نزاع قد ينشأ عنه، ويُعتبر توقيع وبصمة مندوب الطرف الثاني إقراراً رسمياً ملزماً ونافذاً في مواجهة الشركة الموردة.
+          </p>
+        </div>
+
+        {/* 6. Signatures, Seals & Fingerprint Section (4 Dedicated Boxes) */}
+        <div className="shrink-0 border-t-2 border-black pt-1.5">
+          <div className="grid grid-cols-4 gap-2 text-[9px] leading-snug">
+            {/* Box 1: Receiver info & Signature */}
+            <div className="border border-black rounded p-1.5 flex flex-col justify-between h-28 bg-gray-50/50">
+              <div>
+                <p className="font-black text-[9px] text-black border-b border-gray-300 pb-0.5">المندوب المستلم (الطرف الثاني):</p>
+                <p className="mt-1 truncate"><strong>الاسم: </strong>{selectedForPrint.receiverName || "................................"}</p>
+                <p className="truncate"><strong>الرقم القومي: </strong><span className="font-mono font-bold">{selectedForPrint.nationalId || "........................"}</span></p>
+                <p className="mt-0.5"><strong>التوقيع: </strong>................................</p>
+              </div>
+              <p className="text-[7.5px] text-gray-500 text-center">أقر باستلام أصل الشيك وخضوعه لبنود الضمان</p>
+            </div>
+
+            {/* Box 2: Receiver Right Thumbprint */}
+            <div className="border border-black rounded p-1.5 flex flex-col justify-between h-28 bg-gray-50/50 text-center">
+              <p className="font-black text-[9px] text-black border-b border-gray-300 pb-0.5">بصمة إبهام المستلم:</p>
+              <div className="h-16 border-2 border-dashed border-gray-400 rounded flex flex-col items-center justify-center text-[8.5px] text-gray-500 bg-white">
+                <span className="font-bold text-gray-700">بصمة إبهام اليد اليمنى</span>
+                <span className="text-[7px] text-gray-400 font-mono">RIGHT THUMBPRINT</span>
+              </div>
+              <p className="text-[7.5px] text-gray-400">توثيق هوية المستلم بالبصمة الحية</p>
+            </div>
+
+            {/* Box 3: Supplier Official Seal */}
+            <div className="border border-black rounded p-1.5 flex flex-col justify-between h-28 bg-gray-50/50 text-center">
+              <p className="font-black text-[9px] text-black border-b border-gray-300 pb-0.5">خاتم الشركة الموردة:</p>
+              <div className="h-16 border-2 border-dashed border-gray-400 rounded flex flex-col items-center justify-center text-[8.5px] text-gray-500 bg-white">
+                <span className="font-bold text-gray-700">خاتم الشركة الموردة الرسمي</span>
+                <span className="text-[7px] text-gray-400 font-mono">SUPPLIER OFFICIAL STAMP</span>
+              </div>
+              <p className="text-[7.5px] text-gray-400">ختم النسر / الختم التجاري للشركة</p>
+            </div>
+
+            {/* Box 4: Circle K Drawer Seal & Management Approval */}
+            <div className="border border-black rounded p-1.5 flex flex-col justify-between h-28 bg-gray-50/50 text-center">
+              <p className="font-black text-[9px] text-black border-b border-gray-300 pb-0.5">اعتماد وخاتم الساحب:</p>
+              <div className="h-16 border-2 border-dashed border-gray-400 rounded flex flex-col items-center justify-center text-[8.5px] text-gray-500 bg-white">
+                <span className="font-bold text-gray-800">خاتم المنشأة التجاري والضريبي</span>
+                <span className="text-[7px] text-gray-500 font-mono">CR: {branchInfo.commReg} | TAX: {branchInfo.taxId}</span>
+                <span className="text-[7px] font-bold text-rose-800 mt-0.5">إدارة الحسابات والمالية</span>
+              </div>
+              <p className="text-[7.5px] text-gray-400">صادر عن المنظومة المالية المعتمدة</p>
+            </div>
+          </div>
+        </div>
+
+        {/* 7. Security Ledger & Verification Footer */}
+        <div className="shrink-0 border-t border-black pt-1 flex justify-between items-center text-[8px] text-gray-600 font-mono">
+          <span>توثيق رسمي إلكتروني مشفر عبر منظومة Circle K Financial Verification Ledger</span>
+          <span className="font-bold text-black font-sans">صفحة 1 من 1 (محرر رسمي كامل - A4)</span>
+          <span>UID: SEC-{selectedForPrint.chequeNumber || selectedForPrint.id?.slice(0, 8)?.toUpperCase()} | {new Date().toISOString().replace('T', ' ').slice(0, 19)}</span>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
 export default function ChequesPage() {
   const { currentBranch } = useBranch();
   const [cheques, setCheques] = useState<any[]>([]);
@@ -229,10 +528,10 @@ export default function ChequesPage() {
     setSelectedForPrint(target);
     setGeneratingPDF(true);
 
-    await new Promise(resolve => setTimeout(resolve, 350));
+    await new Promise(resolve => setTimeout(resolve, 400));
     let element = document.getElementById("pdf-legal-guarantee-slip");
     if (!element) {
-      await new Promise(resolve => setTimeout(resolve, 350));
+      await new Promise(resolve => setTimeout(resolve, 400));
       element = document.getElementById("pdf-legal-guarantee-slip");
     }
 
@@ -243,24 +542,22 @@ export default function ChequesPage() {
           useCORS: true, 
           logging: false, 
           imageTimeout: 15000,
-          backgroundColor: "#ffffff"
+          backgroundColor: "#ffffff",
+          windowWidth: 794,
+          windowHeight: 1123,
+          scrollX: 0,
+          scrollY: 0,
+          x: 0,
+          y: 0,
+          width: 794,
+          height: 1123,
         });
         const imgData = canvas.toDataURL("image/png");
         const pdf = new jsPDF({ orientation: "p", unit: "mm", format: "a4" });
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = pdf.internal.pageSize.getHeight();
-        const imgHeight = (canvas.height * pdfWidth) / canvas.width;
-        
-        if (imgHeight > pdfHeight) {
-          const scale = pdfHeight / imgHeight;
-          const scaledWidth = pdfWidth * scale;
-          const xOffset = (pdfWidth - scaledWidth) / 2;
-          pdf.addImage(imgData, "PNG", xOffset, 0, scaledWidth, pdfHeight);
-        } else {
-          pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, imgHeight);
-        }
+        // Full A4 page in millimeters: 210 x 297 with zero margins for exact full page fit
+        pdf.addImage(imgData, "PNG", 0, 0, 210, 297, undefined, "FAST");
         pdf.save(`Guarantee_Cheque_${target.chequeNumber || target.id}.pdf`);
-        toast.success("Legal Guarantee Cheque PDF downloaded (Single A4)!");
+        toast.success("Legal Guarantee Cheque PDF downloaded (Full A4)!");
         vibrateSuccess();
       } else {
         toast.error("Could not capture print document.");
@@ -742,110 +1039,14 @@ export default function ChequesPage() {
               </div>
 
               {/* Scrollable Preview Container */}
-              <div className="p-6 overflow-y-auto bg-slate-950/80 flex justify-center">
-                <div className="w-full max-w-[760px] bg-white text-black p-8 rounded-xl shadow-lg font-sans text-right" dir="rtl">
-                  
-                  {/* Document Header */}
-                  <div className="border-b-2 border-slate-900 pb-4 mb-5 flex justify-between items-center">
-                    <div>
-                      <h2 className="text-xl font-black text-slate-900 tracking-tight">جمهورية مصر العربية</h2>
-                      <p className="text-xs font-bold text-slate-600">سند تجاري رسمي مشروط بحد ائتماني</p>
-                    </div>
-                    <div className="text-left" dir="ltr">
-                      <p className="text-[10px] font-mono font-bold text-slate-500">REF: {selectedForPrint.chequeNumber}-{selectedForPrint.id?.slice(-5) || "001"}</p>
-                      <p className="text-xs font-mono font-black text-rose-700">DATE: {selectedForPrint.chequeDate}</p>
-                    </div>
-                  </div>
-
-                  <h1 className="text-lg font-black text-center text-slate-900 mb-4 bg-slate-100 py-2 border border-slate-300 rounded">
-                    إقرار وسند استلام شيك بنكي على سبيل الضمان الائتماني
-                  </h1>
-
-                  {/* Summary Box */}
-                  <div className="text-xs leading-relaxed space-y-3 mb-4 text-slate-800">
-                    <p>
-                      أقر أنا الموقع أدناه السيد / <span className="font-black underline">{selectedForPrint.receiverName || "المندوب المستلم"}</span>، 
-                      بطاقة رقم قومي: <span className="font-mono font-black underline">{selectedForPrint.nationalId || "الرقم القومي"}</span>، 
-                      بصفتي المندوب المفوض بالتوقيع والاستلام عن شركة / <span className="font-black underline">{selectedForPrint.receiverCompanyName || "الشركة الموردة"}</span>،
-                    </p>
-                    <p>
-                      بأنني قد استلمت اليوم من شركة / <span className="font-black">{getBranchLegalInfo(selectedForPrint.storeId).companyNameAr}</span> (توكيل سيركل كي - {getBranchLegalInfo(selectedForPrint.storeId).branchTitleAr})، 
-                      سجل تجاري: <span className="font-mono font-bold">{getBranchLegalInfo(selectedForPrint.storeId).commReg}</span>، 
-                      بطاقة ضريبية: <span className="font-mono font-bold">{getBranchLegalInfo(selectedForPrint.storeId).taxId}</span>:
-                    </p>
-                  </div>
-
-                  {/* Cheque Specifications Grid */}
-                  <div className="bg-slate-50 border-2 border-slate-400 rounded-lg p-3.5 mb-4 grid grid-cols-2 gap-3 text-xs">
-                    <div>
-                      <span className="font-bold text-slate-600">رقم الشيك البنكي: </span>
-                      <span className="font-mono font-black text-sm text-slate-900">{selectedForPrint.chequeNumber}</span>
-                    </div>
-                    <div>
-                      <span className="font-bold text-slate-600">البنك المسحوب عليه: </span>
-                      <span className="font-black text-slate-900">{selectedForPrint.bankName}</span>
-                    </div>
-                    <div>
-                      <span className="font-bold text-slate-600">تاريخ تحرير الشيك: </span>
-                      <span className="font-mono font-bold text-slate-900">{selectedForPrint.chequeDate}</span>
-                    </div>
-                    <div>
-                      <span className="font-bold text-slate-600">مبلغ الشيك بالأرقام: </span>
-                      <span className="font-mono font-black text-sm text-rose-700">EGP {Number(selectedForPrint.amount || 0).toLocaleString()}</span>
-                    </div>
-                    <div className="col-span-2 border-t border-slate-300 pt-2">
-                      <span className="font-bold text-slate-600">المبلغ بالحروف والتفقيط: </span>
-                      <span className="font-black text-slate-900 text-xs">
-                        فقط وقدره {numberToArabicWords(Number(selectedForPrint.amount || 0))}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Strict Legal Articles under Egyptian Law */}
-                  <div className="border border-slate-300 rounded p-3 bg-white mb-5 text-[11px] leading-normal space-y-2 text-slate-700">
-                    <p className="font-black text-slate-900 text-xs border-b pb-1">
-                      الشروط والتعهدات القانونية الملزمة (وفقاً لقانون التجارة المصري رقم 17 لسنة 1999 والقانون المدني):
-                    </p>
-                    <p>
-                      <strong>أولاً: صفة الضمان التأميني:</strong> يقر الطرف الثاني (المستلم وشركته) بأن هذا الشيك قد سُلِّم على سبيل **الضمان والتأمين فقط** لتغطية الحد الائتماني الممنوح للطرف الأول لتوريد بضائع بالآجل، وأنه ليس شيكاً واجب الوفاء الفوري أو مستحق الأداء حالاً.
-                    </p>
-                    <p>
-                      <strong>ثانياً: حظر الصرف البنكي أو التظهير:</strong> يتعهد الطرف الثاني صراحة بعدم تقديم الشيك للصرف البنكي أو تظهيره للغير أو اتخاذ إجراءات قانونية به طالما أن الطرف الأول منتظم في سداد فواتير البضائع المسلمة إليه.
-                    </p>
-                    <p>
-                      <strong>ثالثاً: قصر الاستخدام على المديونية الفعلية بعد الإعذار:</strong> لا يجوز المطالبة بقيمة الشيك إلا في حالة ثبوت التوقف عن السداد وبعد إنذار كتابي رسمي بمهلة 15 يوماً، وفي حدود المديونية الصافية غير المسددة فقط بعد خصم كافة الدفعات والمرتجعات.
-                    </p>
-                    <p>
-                      <strong>رابعاً: التزام رد أصل الشيك:</strong> يلتزم الطرف الثاني برد أصل الشيك فوراً وتسليمه للطرف الأول بمجرد تصفية التعامل التجاري أو استبداله بضمان آخر أو تسوية الحسابات.
-                    </p>
-                    <p>
-                      <strong>خامساً: المسؤولية الجنائية والمدنية:</strong> يُعد أي تقديم أو تصرف في هذا الشيك خلافاً للغرض المخصص له (شيك أمانة وضمان) خيانة للأمانة واستعمالاً لمحرر في غير ما أُعد له وفقاً لقانون العقوبات وقانون التجارة المصري.
-                    </p>
-                  </div>
-
-                  {/* Signature Blocks */}
-                  <div className="grid grid-cols-2 gap-6 border-t-2 border-slate-900 pt-4 text-xs">
-                    <div className="space-y-2">
-                      <p className="font-black text-slate-900">الطرف الثاني (المندوب المستلم والشركة):</p>
-                      <p className="text-[11px]">اسم المستلم: ...........................................</p>
-                      <p className="text-[11px]">الرقم القومي: ...........................................</p>
-                      <p className="text-[11px]">التوقيع: ...................................................</p>
-                      <div className="h-14 border border-dashed border-slate-400 rounded flex items-center justify-center text-[10px] text-slate-400">
-                        [ بصمة إبهام المستلم / خاتم الشركة المستلمة ]
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      <p className="font-black text-slate-900">الطرف الأول (الساحب / إدارة الحسابات):</p>
-                      <p className="text-[11px]">المنشأة: {getBranchLegalInfo(selectedForPrint.storeId).companyNameAr}</p>
-                      <p className="text-[11px]">الاعتماد: {getBranchLegalInfo(selectedForPrint.storeId).managerTitle}</p>
-                      <p className="text-[11px]">التوقيع: ...................................................</p>
-                      <div className="h-14 border border-dashed border-slate-400 rounded flex items-center justify-center text-[10px] text-slate-400">
-                        [ خاتم الشركة الرسمي ]
-                      </div>
-                    </div>
-                  </div>
-
+              <div className="p-6 overflow-y-auto bg-slate-950/80 flex justify-center items-start">
+                <div className="w-full max-w-[794px] bg-white text-black rounded-xl shadow-2xl overflow-hidden p-6" dir="rtl">
+                  <LegalGuaranteeSlipContent
+                    selectedForPrint={selectedForPrint}
+                    getBranchLegalInfo={getBranchLegalInfo}
+                    numberToArabicWords={numberToArabicWords}
+                    isPrint={false}
+                  />
                 </div>
               </div>
 
@@ -853,7 +1054,10 @@ export default function ChequesPage() {
           </div>
 
           {/* Printable Native Container for window.print() & PDF generation (Guaranteed Single A4 Page) */}
-          <div id="single-cheque-print-wrapper" className="hidden print:block fixed inset-0 bg-white text-black p-0 m-0 z-[99999]">
+          <div 
+            id="single-cheque-print-wrapper" 
+            className="fixed top-0 left-0 -z-50 pointer-events-none print:z-[99999] print:pointer-events-auto bg-white text-black p-0 m-0"
+          >
             <style dangerouslySetInnerHTML={{ __html: `
               @page {
                 size: A4 portrait;
@@ -863,6 +1067,8 @@ export default function ChequesPage() {
                 html, body {
                   margin: 0 !important;
                   padding: 0 !important;
+                  width: 210mm !important;
+                  height: 297mm !important;
                   background: #ffffff !important;
                   color: #000000 !important;
                   -webkit-print-color-adjust: exact !important;
@@ -874,142 +1080,43 @@ export default function ChequesPage() {
                   top: 0 !important;
                   left: 0 !important;
                   width: 210mm !important;
-                  height: 296mm !important;
-                  max-height: 296mm !important;
+                  height: 297mm !important;
+                  max-height: 297mm !important;
                   overflow: hidden !important;
                   page-break-after: avoid !important;
                   page-break-inside: avoid !important;
                   break-after: avoid !important;
                   break-inside: avoid !important;
                 }
+                #pdf-legal-guarantee-slip {
+                  width: 210mm !important;
+                  height: 297mm !important;
+                  max-height: 297mm !important;
+                  min-height: 297mm !important;
+                  overflow: hidden !important;
+                }
               }
             `}} />
             <div 
               id="pdf-legal-guarantee-slip" 
-              className="w-[210mm] max-w-[210mm] mx-auto px-7 py-4 bg-white text-black font-sans text-right box-border flex flex-col justify-between" 
+              className="w-[210mm] max-w-[210mm] mx-auto bg-white text-black font-sans text-right box-border select-none" 
               dir="rtl"
-              style={{ width: "210mm", height: "296mm", maxHeight: "296mm", boxSizing: "border-box", overflow: "hidden" }}
+              style={{ 
+                width: "210mm", 
+                height: "297mm", 
+                maxHeight: "297mm", 
+                minHeight: "297mm", 
+                boxSizing: "border-box", 
+                padding: "6mm 8mm",
+                overflow: "hidden" 
+              }}
             >
-              
-              {/* Top Section */}
-              <div>
-                {/* Document Header */}
-                <div className="border-b-2 border-black pb-2 mb-2 flex justify-between items-start">
-                  <div>
-                    <h2 className="text-xl font-black text-black tracking-tight">جمهورية مصر العربية</h2>
-                    <p className="text-[11px] font-bold text-gray-700">سند تجاري وقانوني رسمي - شيك ضمان مشروط بحد ائتماني لتوريد بضائع</p>
-                  </div>
-                  <div className="text-left" dir="ltr">
-                    <p className="text-[11px] font-mono font-bold text-gray-600">REF: CHQ-{selectedForPrint.chequeNumber}</p>
-                    <p className="text-[11px] font-mono font-bold text-black">DATE: {selectedForPrint.chequeDate}</p>
-                  </div>
-                </div>
-
-                {/* Title Box */}
-                <div className="border-2 border-black bg-gray-100 py-1.5 px-3 rounded mb-2 text-center">
-                  <h1 className="text-base font-black text-black">
-                    إقرار وسند استلام شيك بنكي على سبيل الضمان الائتماني
-                  </h1>
-                  <p className="text-[10px] font-semibold text-gray-600">
-                    OFFICIAL COMMERCIAL GUARANTEE CHEQUE ACKNOWLEDGEMENT
-                  </p>
-                </div>
-
-                {/* Preamble / Parties */}
-                <div className="text-xs leading-snug space-y-1 mb-2 text-black">
-                  <p>
-                    أقر أنا الموقع أدناه السيد / <span className="font-black underline">{selectedForPrint.receiverName || "المندوب المستلم"}</span>، 
-                    بطاقة رقم قومي: <span className="font-mono font-black underline">{selectedForPrint.nationalId || "الرقم القومي"}</span>، 
-                    بصفتي المندوب المفوض بالتوقيع والاستلام عن شركة / <span className="font-black underline">{selectedForPrint.receiverCompanyName || "الشركة المستفيدة"}</span>،
-                  </p>
-                  <p>
-                    بأنني قد استلمت اليوم من شركة / <span className="font-black">{getBranchLegalInfo(selectedForPrint.storeId).companyNameAr}</span> ({getBranchLegalInfo(selectedForPrint.storeId).branchTitleAr})، 
-                    سجل تجاري رقم: <span className="font-mono font-bold">{getBranchLegalInfo(selectedForPrint.storeId).commReg}</span>، 
-                    بطاقة ضريبية رقم: <span className="font-mono font-bold">{getBranchLegalInfo(selectedForPrint.storeId).taxId}</span>:
-                  </p>
-                </div>
-
-                {/* Cheque Specifics Box */}
-                <div className="border-2 border-black rounded-lg p-2.5 mb-2 grid grid-cols-2 gap-2 text-xs bg-gray-50">
-                  <div>
-                    <span className="font-bold text-gray-700">رقم الشيك البنكي: </span>
-                    <span className="font-mono font-black text-sm text-black">{selectedForPrint.chequeNumber}</span>
-                  </div>
-                  <div>
-                    <span className="font-bold text-gray-700">البنك المسحوب عليه: </span>
-                    <span className="font-black text-black">{selectedForPrint.bankName}</span>
-                  </div>
-                  <div>
-                    <span className="font-bold text-gray-700">تاريخ تحرير الشيك: </span>
-                    <span className="font-mono font-bold text-black">{selectedForPrint.chequeDate}</span>
-                  </div>
-                  <div>
-                    <span className="font-bold text-gray-700">قيمة الشيك بالأرقام: </span>
-                    <span className="font-mono font-black text-sm text-black">EGP {Number(selectedForPrint.amount || 0).toLocaleString()}</span>
-                  </div>
-                  <div className="col-span-2 border-t border-gray-300 pt-1.5">
-                    <span className="font-bold text-gray-700">المبلغ بالحروف والتفقيط: </span>
-                    <span className="font-black text-black text-xs">
-                      فقط وقدره {numberToArabicWords(Number(selectedForPrint.amount || 0))}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Binding Articles */}
-                <div className="border border-black rounded p-2.5 mb-2 text-[10px] leading-snug space-y-1.5 text-justify">
-                  <p className="font-black text-xs text-black border-b border-gray-300 pb-0.5">
-                    البنود والشروط القانونية الحاكمة (وفقاً لأحكام قانون التجارة المصري رقم 17 لسنة 1999 والقانون المدني):
-                  </p>
-                  <p>
-                    <strong>المادة الأولى (صفة الضمان التأميني):</strong> يقر الطرف الثاني (الشركة المستفيدة ومندوبها المفوض) بأن هذا الشيك قد سُلِّم على سبيل **الضمان والتأمين التجاري فقط** لتغطية الحد الائتماني الممنوح للطرف الأول لتوريد بضائع بالآجل، وأنه ليس شيكاً واجب الوفاء الفوري أو مستحق الأداء حالاً في تاريخه، ولا يمثل مديونية قائمة بذاتها.
-                  </p>
-                  <p>
-                    <strong>المادة الثانية (حظر الصرف البنكي أو التظهير):</strong> يحظر تماماً على الطرف الثاني تقديم الشيك للصرف من البنك المسحوب عليه أو تظهيره أو رهنه للغير أو اتخاذ أي بلاغات جنائية بموجبه، طالما أن الطرف الأول منتظم في سداد فواتير البضائع المسلمة إليه طبقاً للمدد الائتمانية المقررة.
-                  </p>
-                  <p>
-                    <strong>المادة الثالثة (قصر المطالبة على العجز الفعلي بعد الإعذار):</strong> في حال حدوث أي توقف أو إخلال مثبت بالسداد من قبل الطرف الأول، يلتزم الطرف الثاني بتوجيه إخطار كتابي رسمي بمهلة لا تقل عن 15 يوماً، ولا يجوز له بأي حال من الأحوال المطالبة إلا بصافي قيمة المديونية الفعلية غير المسددة فقط بعد استنزال كافة الدفعات والمرتجعات.
-                  </p>
-                  <p>
-                    <strong>المادة الرابعة (الالتزام برد أصل الشيك):</strong> يلتزم الطرف الثاني برد أصل الشيك فوراً وتسليمه للطرف الأول بمجرد انتهاء التعامل التجاري أو تقديم ضمان بديل أو سداد المديونية، ويُعد أي سداد بموجب إيصالات أو تحويلات بنكية مسقطاً لأي التزام يغطيه هذا الشيك.
-                  </p>
-                  <p>
-                    <strong>المادة الخامسة (المسؤولية الجنائية والمدنية):</strong> يقر الطرف الثاني بأن أي استخدام لهذا الشيك خلافاً للغرض المخصص له (شيك أمانة وضمان) يُعد خيانة للأمانة واستعمالاً لمحرر في غير ما أُعد له وفقاً لقانون العقوبات وقانون التجارة المصري رقم 17 لسنة 1999، ويتحمل المودع لديه المسؤولية الجنائية والتعويض المدني الكامل.
-                  </p>
-                </div>
-              </div>
-
-              {/* Bottom Section: Signatures & Stamps + Security Footer */}
-              <div className="shrink-0 mt-1">
-                {/* Signatures & Stamps */}
-                <div className="grid grid-cols-2 gap-6 border-t-2 border-black pt-2 text-xs">
-                  <div className="space-y-1">
-                    <p className="font-black text-xs text-black">الطرف الثاني (المندوب المستلم والشركة الموردة):</p>
-                    <p className="text-[11px]">اسم المندوب رباعي: ............................................</p>
-                    <p className="text-[11px]">الرقم القومي: .................................................</p>
-                    <p className="text-[11px]">التوقيع الرسمي: .............................................</p>
-                    <div className="h-14 border-2 border-dashed border-gray-400 rounded flex items-center justify-center text-[10px] text-gray-500 mt-1">
-                      [ بصمة إبهام المستلم / خاتم الشركة المستلمة الرسمي ]
-                    </div>
-                  </div>
-
-                  <div className="space-y-1">
-                    <p className="font-black text-xs text-black">الطرف الأول (الساحب / إدارة الحسابات):</p>
-                    <p className="text-[11px]">الشركة: {getBranchLegalInfo(selectedForPrint.storeId).companyNameAr}</p>
-                    <p className="text-[11px]">المفوض بالاعتماد: {getBranchLegalInfo(selectedForPrint.storeId).managerTitle}</p>
-                    <p className="text-[11px]">التوقيع: .....................................................</p>
-                    <div className="h-14 border-2 border-dashed border-gray-400 rounded flex items-center justify-center text-[10px] text-gray-500 mt-1">
-                      [ خاتم المنشأة التجاري الرسمي ]
-                    </div>
-                  </div>
-                </div>
-
-                {/* Security Footer */}
-                <div className="border-t border-gray-300 pt-1 mt-2 flex justify-between items-center text-[9px] text-gray-500">
-                  <p>توثيق رسمي إلكتروني مشفر عبر منظومة Circle K Financial Verification Ledger</p>
-                  <p className="font-mono">TIMESTAMP: {new Date().toISOString()}</p>
-                </div>
-              </div>
-
+              <LegalGuaranteeSlipContent
+                selectedForPrint={selectedForPrint}
+                getBranchLegalInfo={getBranchLegalInfo}
+                numberToArabicWords={numberToArabicWords}
+                isPrint={true}
+              />
             </div>
           </div>
         </>
