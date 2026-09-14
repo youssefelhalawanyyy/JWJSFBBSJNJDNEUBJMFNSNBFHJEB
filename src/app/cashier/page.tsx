@@ -289,8 +289,18 @@ export default function CashierHubPage() {
               toast.error(lang === "en" ? "This cashier account was removed. Please log in again." : "تم حذف هذا الحساب من قبل الإدارة. يرجى تسجيل الدخول مجدداً.");
               return;
             }
+
+            const cData = snap.data();
+            if (cData?.status === "inactive") {
+              localStorage.removeItem("active_cashier_session");
+              setAuthenticatedUser(null);
+              setLoading(false);
+              toast.error(lang === "en" ? "This account is deactivated by management." : "هذا الحساب معطل حالياً من قبل الإدارة.");
+              return;
+            }
+
             const revSnap = await getDoc(doc(db, "revoked_cashier_sessions", parsed.id)).catch(() => null);
-            if (revSnap?.exists()) {
+            if (revSnap?.exists() && (revSnap.data()?.status === "inactive" || revSnap.data()?.forceLogout)) {
               localStorage.removeItem("active_cashier_session");
               setAuthenticatedUser(null);
               setLoading(false);
@@ -314,30 +324,13 @@ export default function CashierHubPage() {
     }
     (async () => {
       try {
-        const [empSnap, cashSnap] = await Promise.all([
-          getDocs(collection(db, "employees")).catch(() => null),
-          getDocs(collection(db, "cashiers"))
-        ]);
-
-        let activeNames: Set<string> | null = null;
-        if (empSnap) {
-          activeNames = new Set(empSnap.docs.filter(d => d.data().status === "active").map(d => d.data().name));
-        }
-
+        const cashSnap = await getDocs(collection(db, "cashiers"));
+        // Cashiers collection is source of truth. Never auto-delete cashiers!
         let list: any[] = cashSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-        if (activeNames) {
-          list = list.filter(c => activeNames!.has(c.name));
-          
-          // Non-blocking background cleanup for inactive cashiers
-          const toDelete = cashSnap.docs.filter(d => !activeNames!.has(d.data().name));
-          if (toDelete.length > 0) {
-            Promise.all(toDelete.map(d => deleteDoc(doc(db, "cashiers", d.id)).catch(() => {}))).catch(() => {});
-          }
-        }
         
         list.push({ id: "master_youssef", employeeId: "master_youssef", name: "Mr Youssef (Owner)", pin: "4321", role: "master", storeId: "ALL" });
         setEmployees(list);
-      } catch (e) { console.error(e); }
+      } catch (e) { console.error("Failed to load cashiers list:", e); }
       finally { setLoading(false); }
     })();
   }, []);
@@ -347,6 +340,18 @@ export default function CashierHubPage() {
     if (!selectedEmployeeId) { toast.error(lang === "en" ? "Select your name first." : "اختر اسمك أولاً."); return; }
     const user = employees.find(x => x.id === selectedEmployeeId);
     if (!user) return;
+
+    if (user.status === "inactive") {
+      if (navigator.vibrate) navigator.vibrate([50, 100, 50]);
+      playErrorSound();
+      toast.error(
+        lang === "en" 
+          ? "This account is deactivated by management. Please contact your manager." 
+          : "هذا الحساب معطل حالياً من قبل الإدارة. يرجى مراجعة المسؤول."
+      );
+      return;
+    }
+
     const pin = typeof e === "string" ? e : pinInput;
     if (!user.pin || pin !== user.pin) {
       if (navigator.vibrate) navigator.vibrate([50, 50, 50]);
@@ -745,7 +750,14 @@ export default function CashierHubPage() {
                       <div key={c.id} onClick={() => { playPopSound(); setSelectedEmployeeId(c.id); setIsDropdownOpen(false); if (localStorage.getItem(`faceid_enabled_${c.id}`) === "true") loginWithFaceId(c.id); }} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", cursor: "pointer", borderBottom: idx < employees.length - 1 ? `1px solid ${D.border}` : "none" }}>
                         <div style={{ width: 32, height: 32, borderRadius: 8, background: D.cyanDim, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: D.cyan, flexShrink: 0 }}>{c.name.charAt(0).toUpperCase()}</div>
                         <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: 14, fontWeight: 600, color: D.textPrimary }}>{c.name}</div>
+                          <div style={{ fontSize: 14, fontWeight: 600, color: c.status === "inactive" ? "#94a3b8" : D.textPrimary, display: "flex", alignItems: "center", gap: 6 }}>
+                            <span>{c.name}</span>
+                            {c.status === "inactive" && (
+                              <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 6px", borderRadius: 6, background: "rgba(239,68,68,0.15)", color: "#f87171", border: "1px solid rgba(239,68,68,0.3)" }}>
+                                {lang === "en" ? "Deactivated" : "معطل"}
+                              </span>
+                            )}
+                          </div>
                           {c.position && <div style={{ fontSize: 10, fontWeight: 600, color: D.textSecondary, marginTop: 2, textTransform: "uppercase" }}>{c.position}</div>}
                         </div>
                         {localStorage.getItem(`faceid_enabled_${c.id}`) === "true" && <Fingerprint size={16} color={D.cyan} style={{ opacity: 0.8, flexShrink: 0 }} />}

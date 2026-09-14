@@ -73,6 +73,7 @@ interface CashierProfile {
   name: string;
   storeId: string;
   pin: string;
+  status?: "active" | "inactive";
   shiftType?: string;
   branchId?: string;
   employeeId?: string;
@@ -81,6 +82,7 @@ interface CashierProfile {
     [key: string]: any;
   };
   createdAt?: string;
+  updatedAt?: string;
 }
 
 export default function CashierManagementPage() {
@@ -110,6 +112,7 @@ export default function CashierManagementPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedBranchFilter, setSelectedBranchFilter] = useState<string>("all");
   const [selectedShiftFilter, setSelectedShiftFilter] = useState<string>("all");
+  const [selectedStatusFilter, setSelectedStatusFilter] = useState<"all" | "active" | "inactive">("all");
   const [viewMode, setViewMode] = useState<"grid" | "table">("grid");
 
   // PIN Reveal States (map cashierId -> boolean)
@@ -134,6 +137,7 @@ export default function CashierManagementPage() {
     branchId: "alamein4",
     storeId: "eL-alamein-4",
     pin: "",
+    status: "active" as "active" | "inactive",
     shiftType: "All",
     employeeId: "",
     canUseMasterScanner: false
@@ -211,7 +215,7 @@ export default function CashierManagementPage() {
 🏢 الفرع: ${branchName}
 🔒 الرمز السري (PIN): ${cashier.pin}
 ⏱️ الوردية المسموحة: ${shiftName}
-🔗 الرابط: https://anhreports.com/cashier
+🔗 الرابط: https://anh-zeta.vercel.app/cashier
 *يرجى الحفاظ على سرية هذا الرمز وعدم مشاركته.*`;
 
     const encoded = encodeURIComponent(message);
@@ -276,6 +280,7 @@ export default function CashierManagementPage() {
       branchId: initialBranch,
       storeId: initialBranch === "ola" ? "ola-el-koronfol" : "eL-alamein-4",
       pin: Math.floor(1000 + Math.random() * 9000).toString(),
+      status: "active",
       shiftType: "All",
       employeeId: "",
       canUseMasterScanner: true
@@ -298,6 +303,7 @@ export default function CashierManagementPage() {
       branchId: cashier.branchId || (cashier.storeId?.includes("ola") ? "ola" : "alamein4"),
       storeId: cashier.storeId || "eL-alamein-4",
       pin: cashier.pin || "",
+      status: cashier.status || "active",
       shiftType: cashier.shiftType || "All",
       employeeId: cashier.employeeId || "",
       canUseMasterScanner: Boolean(cashier.features?.canUseMasterScanner)
@@ -336,12 +342,14 @@ export default function CashierManagementPage() {
     try {
       const selectedEmp = employeesList.find(emp => emp.name === formData.name);
       const resolvedEmpId = selectedEmp ? selectedEmp.id : formData.employeeId;
+      const nameSlug = formData.name.trim().toLowerCase().replace(/\s+/g, "_");
 
       const payload = {
         name: formData.name.trim(),
         branchId: formData.branchId,
         storeId: formData.storeId.trim(),
         pin: formData.pin,
+        status: formData.status || "active",
         shiftType: formData.shiftType,
         employeeId: resolvedEmpId || "",
         features: {
@@ -355,6 +363,13 @@ export default function CashierManagementPage() {
       if (modalMode === "edit" && editTargetId) {
         await updateDoc(doc(db, "cashiers", editTargetId), payload);
         savedRecord = { id: editTargetId, ...payload };
+        // If active, purge any revoked sessions
+        if (payload.status === "active") {
+          await Promise.all([
+            deleteDoc(doc(db, "revoked_cashier_sessions", editTargetId)).catch(() => {}),
+            deleteDoc(doc(db, "revoked_cashier_sessions", `name_${nameSlug}`)).catch(() => {})
+          ]);
+        }
         toast.success(`Updated credentials for ${formData.name}`);
       } else {
         const docRef = await addDoc(collection(db, "cashiers"), {
@@ -362,6 +377,11 @@ export default function CashierManagementPage() {
           createdAt: new Date().toISOString()
         });
         savedRecord = { id: docRef.id, ...payload };
+        // Clean any old revoked session tombstones for this name and ID!
+        await Promise.all([
+          deleteDoc(doc(db, "revoked_cashier_sessions", docRef.id)).catch(() => {}),
+          deleteDoc(doc(db, "revoked_cashier_sessions", `name_${nameSlug}`)).catch(() => {})
+        ]);
         toast.success(`Cashier ${formData.name} created successfully!`);
       }
 
@@ -373,6 +393,77 @@ export default function CashierManagementPage() {
       toast.error(`Failed to save cashier: ${err.message || "Unknown error"}`);
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  // 1-Click Activate / Deactivate Toggle for Cashier Portal
+  const handleToggleCashierStatus = async (cashier: CashierProfile) => {
+    if (isManager) {
+      toast.error("Managers are not authorized to modify cashier status.");
+      return;
+    }
+    triggerHapticFeedback([20, 35]);
+    playPopSound();
+
+    const isCurrentlyActive = cashier.status !== "inactive";
+    const nextStatus: "active" | "inactive" = isCurrentlyActive ? "inactive" : "active";
+    const nameSlug = cashier.name.trim().toLowerCase().replace(/\s+/g, "_");
+
+    const toastId = toast.loading(
+      isCurrentlyActive 
+        ? `Deactivating ${cashier.name} and revoking portal access...` 
+        : `Activating ${cashier.name} and granting portal access...`
+    );
+
+    try {
+      // 1. Update status in cashiers collection
+      await updateDoc(doc(db, "cashiers", cashier.id), {
+        status: nextStatus,
+        updatedAt: new Date().toISOString()
+      });
+
+      if (nextStatus === "inactive") {
+        // Immediate remote logout signal
+        await Promise.all([
+          setDoc(doc(db, "revoked_cashier_sessions", cashier.id), {
+            cashierId: cashier.id,
+            name: cashier.name,
+            revokedAt: new Date().toISOString(),
+            status: "inactive",
+            forceLogout: true
+          }, { merge: true }).catch(() => {}),
+          setDoc(doc(db, "revoked_cashier_sessions", `name_${nameSlug}`), {
+            cashierId: cashier.id,
+            name: cashier.name,
+            revokedAt: new Date().toISOString(),
+            status: "inactive",
+            forceLogout: true
+          }, { merge: true }).catch(() => {})
+        ]);
+
+        // Terminate matching active_sessions
+        const sessionsSnap = await getDocs(
+          query(collection(db, "active_sessions"), where("cashierId", "==", cashier.id))
+        ).catch(() => null);
+        if (sessionsSnap && !sessionsSnap.empty) {
+          await Promise.all(sessionsSnap.docs.map(d => updateDoc(d.ref, { forceLogout: true }).catch(() => {})));
+        }
+
+        toast.dismiss(toastId);
+        toast.success(`Cashier ${cashier.name} deactivated. Portal access disabled.`);
+      } else {
+        // Purge any revoked session records
+        await Promise.all([
+          deleteDoc(doc(db, "revoked_cashier_sessions", cashier.id)).catch(() => {}),
+          deleteDoc(doc(db, "revoked_cashier_sessions", `name_${nameSlug}`)).catch(() => {})
+        ]);
+
+        toast.dismiss(toastId);
+        toast.success(`Cashier ${cashier.name} activated! Ready to use cashier portal.`);
+      }
+    } catch (err: any) {
+      toast.dismiss(toastId);
+      toast.error(`Failed to update status: ${err.message || "Unknown error"}`);
     }
   };
 
@@ -534,19 +625,28 @@ export default function CashierManagementPage() {
         if (cShift !== selectedShiftFilter && cShift !== "All") return false;
       }
 
+      // 4. Status filter
+      if (selectedStatusFilter !== "all") {
+        const isActive = c.status !== "inactive";
+        if (selectedStatusFilter === "active" && !isActive) return false;
+        if (selectedStatusFilter === "inactive" && isActive) return false;
+      }
+
       return true;
     });
-  }, [cashiers, searchQuery, selectedBranchFilter, selectedShiftFilter]);
+  }, [cashiers, searchQuery, selectedBranchFilter, selectedShiftFilter, selectedStatusFilter]);
 
   // Executive Metrics
   const stats = useMemo(() => {
     const total = cashiers.length;
+    const activeCount = cashiers.filter(c => c.status !== "inactive").length;
+    const inactiveCount = cashiers.filter(c => c.status === "inactive").length;
     const onlineCount = cashiers.filter(c => isCashierActiveOnTerminal(c)).length;
     const scannerCount = cashiers.filter(c => Boolean(c.features?.canUseMasterScanner)).length;
     const alameinCount = cashiers.filter(c => c.branchId === "alamein4" || (c.storeId || "").toLowerCase().includes("alamein")).length;
     const olaCount = cashiers.filter(c => c.branchId === "ola" || (c.storeId || "").toLowerCase().includes("ola")).length;
 
-    return { total, onlineCount, scannerCount, alameinCount, olaCount };
+    return { total, activeCount, inactiveCount, onlineCount, scannerCount, alameinCount, olaCount };
   }, [cashiers, activeSessions]);
 
   // Helper for Shift Styling
@@ -668,8 +768,9 @@ export default function CashierManagementPage() {
             <span className="text-xs text-slate-400">Cashiers</span>
           </div>
           <p className="mt-2 text-xs text-slate-400 flex items-center gap-1.5">
-            <Building2 className="w-3.5 h-3.5 text-slate-500" />
-            <span>{stats.alameinCount} Alamein • {stats.olaCount} Koronfol</span>
+            <span className="font-semibold text-emerald-400">{stats.activeCount} Active</span>
+            <span>•</span>
+            <span className="font-semibold text-amber-400">{stats.inactiveCount} Deactivated</span>
           </p>
         </div>
 
@@ -711,7 +812,7 @@ export default function CashierManagementPage() {
         {/* Security & 4-Digit Tokens */}
         <div className="bg-[#0f1629]/80 border border-white/10 rounded-2xl p-5 shadow-lg backdrop-blur-md relative overflow-hidden group hover:border-purple-500/30 transition-all">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">PIN Vault Security</span>
+            <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Portal Security</span>
             <div className="w-9 h-9 rounded-xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400 group-hover:scale-110 transition-transform">
               <Lock className="w-5 h-5" />
             </div>
@@ -729,12 +830,12 @@ export default function CashierManagementPage() {
       </div>
 
       {/* =========================================================================
-          3. CONTROL TOOLBAR (Search, Branch Pills, Shift Tabs, View Toggle)
+          3. CONTROL TOOLBAR (Search, Branch Pills, Shift Tabs, Status Filter, View Toggle)
          ========================================================================= */}
       <div className="bg-[#0e1424]/90 border border-white/10 rounded-2xl p-4 shadow-xl backdrop-blur-md flex flex-col md:flex-row items-center justify-between gap-4">
         
         {/* Search Box */}
-        <div className="relative w-full md:w-80">
+        <div className="relative w-full md:w-72">
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
           <input
             type="text"
@@ -757,7 +858,7 @@ export default function CashierManagementPage() {
         <div className="flex items-center gap-1.5 overflow-x-auto w-full md:w-auto p-1 bg-[#13192c] rounded-xl border border-white/5 text-xs font-semibold">
           <button
             onClick={() => setSelectedBranchFilter("all")}
-            className={`px-3.5 py-1.5 rounded-lg transition-all ${
+            className={`px-3 py-1.5 rounded-lg transition-all ${
               selectedBranchFilter === "all"
                 ? "bg-red-600 text-white shadow-md font-bold"
                 : "text-slate-400 hover:text-white hover:bg-white/5"
@@ -767,23 +868,57 @@ export default function CashierManagementPage() {
           </button>
           <button
             onClick={() => setSelectedBranchFilter("alamein4")}
-            className={`px-3.5 py-1.5 rounded-lg transition-all ${
+            className={`px-3 py-1.5 rounded-lg transition-all ${
               selectedBranchFilter === "alamein4"
                 ? "bg-cyan-600 text-white shadow-md font-bold"
                 : "text-slate-400 hover:text-white hover:bg-white/5"
             }`}
           >
-            El Alamein 4 ({stats.alameinCount})
+            Alamein ({stats.alameinCount})
           </button>
           <button
             onClick={() => setSelectedBranchFilter("ola")}
-            className={`px-3.5 py-1.5 rounded-lg transition-all ${
+            className={`px-3 py-1.5 rounded-lg transition-all ${
               selectedBranchFilter === "ola"
                 ? "bg-purple-600 text-white shadow-md font-bold"
                 : "text-slate-400 hover:text-white hover:bg-white/5"
             }`}
           >
-            Ola El Koronfol ({stats.olaCount})
+            Koronfol ({stats.olaCount})
+          </button>
+        </div>
+
+        {/* Status Filter Tabs */}
+        <div className="flex items-center gap-1 bg-[#13192c] p-1 rounded-xl border border-white/5 text-xs font-medium">
+          <button
+            onClick={() => setSelectedStatusFilter("all")}
+            className={`px-2.5 py-1 rounded-lg transition-all ${
+              selectedStatusFilter === "all"
+                ? "bg-white/10 text-white font-bold"
+                : "text-slate-400 hover:text-white"
+            }`}
+          >
+            All
+          </button>
+          <button
+            onClick={() => setSelectedStatusFilter("active")}
+            className={`px-2.5 py-1 rounded-lg transition-all ${
+              selectedStatusFilter === "active"
+                ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-bold"
+                : "text-slate-400 hover:text-white"
+            }`}
+          >
+            Active ({stats.activeCount})
+          </button>
+          <button
+            onClick={() => setSelectedStatusFilter("inactive")}
+            className={`px-2.5 py-1 rounded-lg transition-all ${
+              selectedStatusFilter === "inactive"
+                ? "bg-amber-500/20 text-amber-400 border border-amber-500/30 font-bold"
+                : "text-slate-400 hover:text-white"
+            }`}
+          >
+            Deactivated ({stats.inactiveCount})
           </button>
         </div>
 
@@ -912,15 +1047,40 @@ export default function CashierManagementPage() {
                       </div>
                     </div>
 
-                    {/* Online / Idle Pill */}
-                    <div>
+                    {/* Status Toggle & POS State */}
+                    <div className="flex flex-col items-end gap-1.5">
+                      {!isManager ? (
+                        <button
+                          type="button"
+                          onClick={() => handleToggleCashierStatus(cashier)}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-black uppercase tracking-wider transition-all shadow-sm active:scale-95 ${
+                            cashier.status !== "inactive"
+                              ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25"
+                              : "bg-amber-500/15 text-amber-400 border border-amber-500/30 hover:bg-amber-500/25"
+                          }`}
+                          title={cashier.status !== "inactive" ? "Account Active — Click to Deactivate" : "Account Deactivated — Click to Activate"}
+                        >
+                          <span className={`w-2 h-2 rounded-full ${cashier.status !== "inactive" ? "bg-emerald-400 animate-pulse" : "bg-amber-400"}`} />
+                          <span>{cashier.status !== "inactive" ? "Active" : "Deactivated"}</span>
+                        </button>
+                      ) : (
+                        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                          cashier.status !== "inactive"
+                            ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/30"
+                            : "bg-amber-500/15 text-amber-400 border border-amber-500/30"
+                        }`}>
+                          <span className={`w-2 h-2 rounded-full ${cashier.status !== "inactive" ? "bg-emerald-400" : "bg-amber-400"}`} />
+                          <span>{cashier.status !== "inactive" ? "Active" : "Deactivated"}</span>
+                        </span>
+                      )}
+
                       {isOnline ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 animate-pulse shadow-sm">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                        <span className="inline-flex items-center gap-1 text-[9px] font-bold text-emerald-400/90">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
                           Live POS
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold text-slate-400 bg-white/5 border border-white/5">
+                        <span className="text-[9px] font-medium text-slate-500">
                           Offline
                         </span>
                       )}
@@ -1018,14 +1178,29 @@ export default function CashierManagementPage() {
                   </div>
 
                   <div className="flex items-center gap-1.5">
+                    {/* Toggle Active / Inactive */}
+                    {!isManager && (
+                      <button
+                        onClick={() => handleToggleCashierStatus(cashier)}
+                        className={`p-2 rounded-xl border transition-all hover:scale-105 active:scale-95 ${
+                          cashier.status !== "inactive"
+                            ? "bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border-amber-500/20"
+                            : "bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border-emerald-500/20"
+                        }`}
+                        title={cashier.status !== "inactive" ? "Deactivate Cashier (Revoke Portal Access)" : "Activate Cashier (Grant Portal Access)"}
+                      >
+                        <Power className="w-4 h-4" />
+                      </button>
+                    )}
+
                     {/* Force Remote Logout */}
                     {isOnline && (
                       <button
                         onClick={() => handleForceLogoutSession(cashier)}
-                        className="p-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/20 transition-colors"
-                        title="Force Remote Logout on all devices"
+                        className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/10 transition-colors"
+                        title="Force Remote Logout on connected POS"
                       >
-                        <Power className="w-4 h-4" />
+                        <Radio className="w-4 h-4 text-emerald-400 animate-pulse" />
                       </button>
                     )}
 
@@ -1067,7 +1242,8 @@ export default function CashierManagementPage() {
                   <th className="p-4">Branch & Store</th>
                   <th className="p-4">Shift Window</th>
                   <th className="p-4">Security PIN</th>
-                  <th className="p-4">POS Status</th>
+                  <th className="p-4">Account Status</th>
+                  <th className="p-4">POS Live</th>
                   <th className="p-4">Dispatch & Badges</th>
                   <th className="p-4 text-right">Actions</th>
                 </tr>
@@ -1123,6 +1299,32 @@ export default function CashierManagementPage() {
                         </div>
                       </td>
                       <td className="p-4">
+                        {!isManager ? (
+                          <button
+                            type="button"
+                            onClick={() => handleToggleCashierStatus(cashier)}
+                            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all border shadow-sm active:scale-95 ${
+                              cashier.status !== "inactive"
+                                ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/25"
+                                : "bg-amber-500/15 text-amber-400 border-amber-500/30 hover:bg-amber-500/25"
+                            }`}
+                            title={cashier.status !== "inactive" ? "Active — Click to Deactivate" : "Deactivated — Click to Activate"}
+                          >
+                            <span className={`w-2 h-2 rounded-full ${cashier.status !== "inactive" ? "bg-emerald-400 animate-pulse" : "bg-amber-400"}`} />
+                            <span>{cashier.status !== "inactive" ? "Active" : "Deactivated"}</span>
+                          </button>
+                        ) : (
+                          <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border ${
+                            cashier.status !== "inactive"
+                              ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+                              : "bg-amber-500/15 text-amber-400 border-amber-500/30"
+                          }`}>
+                            <span className={`w-2 h-2 rounded-full ${cashier.status !== "inactive" ? "bg-emerald-400" : "bg-amber-400"}`} />
+                            <span>{cashier.status !== "inactive" ? "Active" : "Deactivated"}</span>
+                          </span>
+                        )}
+                      </td>
+                      <td className="p-4">
                         {isOnline ? (
                           <span className="inline-flex items-center gap-1 text-xs font-bold text-emerald-400">
                             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
@@ -1151,6 +1353,19 @@ export default function CashierManagementPage() {
                         </div>
                       </td>
                       <td className="p-4 text-right space-x-2">
+                        {!isManager && (
+                          <button
+                            onClick={() => handleToggleCashierStatus(cashier)}
+                            className={`p-1.5 rounded-lg transition-colors ${
+                              cashier.status !== "inactive"
+                                ? "text-amber-400 hover:bg-amber-500/10"
+                                : "text-emerald-400 hover:bg-emerald-500/10"
+                            }`}
+                            title={cashier.status !== "inactive" ? "Deactivate Account" : "Activate Account"}
+                          >
+                            <Power className="w-4 h-4" />
+                          </button>
+                        )}
                         {!isManager && (
                           <button
                             onClick={() => handleOpenEditModal(cashier)}
@@ -1398,6 +1613,34 @@ export default function CashierManagementPage() {
                   </div>
                 </div>
 
+                {/* 6. Account Status (Portal Access) */}
+                <div className="p-4 rounded-2xl bg-[#090d18] border border-white/10 flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <p className="text-sm font-bold text-white flex items-center gap-2">
+                      <Power className="w-4 h-4 text-emerald-400" />
+                      Account Status (Portal Access)
+                    </p>
+                    <p className="text-xs text-slate-400">
+                      Active cashiers can log into the cashier hub and submit shift reports. When deactivated, portal access is locked.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setFormData(prev => ({
+                      ...prev,
+                      status: prev.status === "inactive" ? "active" : "inactive"
+                    }))}
+                    className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl font-bold text-xs border transition-all active:scale-95 ${
+                      formData.status !== "inactive"
+                        ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/40"
+                        : "bg-amber-500/20 text-amber-400 border-amber-500/40"
+                    }`}
+                  >
+                    <span className={`w-2 h-2 rounded-full ${formData.status !== "inactive" ? "bg-emerald-400 animate-pulse" : "bg-amber-400"}`} />
+                    <span>{formData.status !== "inactive" ? "Active (Enabled)" : "Deactivated (Locked)"}</span>
+                  </button>
+                </div>
+
                 {/* Action Buttons */}
                 <div className="pt-4 border-t border-white/10 flex items-center justify-end gap-3">
                   <button
@@ -1585,7 +1828,7 @@ export default function CashierManagementPage() {
                 {/* Encrypted QR Code for Instant Camera Login */}
                 <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 shadow-inner inline-block">
                   <QRCode
-                    value={`https://anhreports.com/cashier?auto_name=${encodeURIComponent(selectedBadgeCashier.name)}&auto_pin=${selectedBadgeCashier.pin}`}
+                    value={`https://anh-zeta.vercel.app/cashier?auto_name=${encodeURIComponent(selectedBadgeCashier.name)}&auto_pin=${selectedBadgeCashier.pin}`}
                     size={130}
                     level="M"
                   />

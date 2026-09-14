@@ -358,6 +358,7 @@ export default function CashierShiftReportPage() {
       }
 
       // 1. Check if there is a rejected or disputed report for this cashier today
+      const todayStr = new Date().toISOString().substring(0, 10);
       const rejectQuery = query(
         collection(db, "shift_reports"),
         where("cashierDetails.name", "==", c.name),
@@ -365,10 +366,16 @@ export default function CashierShiftReportPage() {
       );
       
       const rejectSnap = await getDocs(rejectQuery);
-      if (!rejectSnap.empty) {
+      // Filter strictly for reports from today
+      const todayRejected = rejectSnap.docs.filter(d => {
+        const rData = d.data();
+        return rData.cashierDetails?.date === todayStr || rData.date === todayStr;
+      });
+
+      if (todayRejected.length > 0) {
         // Sort in memory to get the latest without needing a composite index
-        const sortedDocs = rejectSnap.docs.sort((a, b) => 
-          b.data().createdAt.localeCompare(a.data().createdAt)
+        const sortedDocs = todayRejected.sort((a, b) => 
+          (b.data().createdAt || "").localeCompare(a.data().createdAt || "")
         );
         const rejectedReport = sortedDocs[0];
         const data = rejectedReport.data();
@@ -403,7 +410,6 @@ export default function CashierShiftReportPage() {
         } else {
           setDenominations({ '200': "", '100': "", '50': "", '20': "", '10': "", '5': "", 'coins': String(data.cashierCounts.cash) });
         }
-        setVisa(String(data.cashierCounts.visa));
         setVisa(String(data.cashierCounts.visa));
         const prevCigCounts = data.inventoryCounts?.cigaretteCounts || {};
         const formattedCigCounts: Record<string, { start: string; delivery: string; end: string }> = {};
@@ -502,7 +508,16 @@ export default function CashierShiftReportPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    const c = cashiers.find(x => x.id === selectedCashierId);
+    const sessionUser = typeof window !== "undefined" ? JSON.parse(localStorage.getItem("active_cashier_session") || "null") : null;
+    const c = cashiers.find(x => x.id === selectedCashierId) || (sessionUser?.id === selectedCashierId ? sessionUser : null) || sessionUser;
+
+    if (!c) {
+      vibrateError();
+      toast.error(lang === 'en' ? "Cashier session expired. Please log in again." : "انتهت جلسة الكاشير. يرجى تسجيل الدخول مجدداً.");
+      setLoading(false);
+      return;
+    }
+
     const signature = cashierSignature || (hasSigned && sigPadRef.current ? sigPadRef.current.toDataURL() : null);
 
     if (!signature) {
@@ -518,9 +533,9 @@ export default function CashierShiftReportPage() {
       status: "pending_manager",
       createdAt: new Date().toISOString(),
       cashierDetails: {
-        name: c?.name || "Unknown",
+        name: c?.name || "Cashier",
         date,
-        shift,
+        shift: shift || c?.shift || "1",
         storeId: c?.storeId || "Unknown",
       },
       branchId: c?.branchId || "alamein4",
@@ -552,6 +567,8 @@ export default function CashierShiftReportPage() {
         }
       }
     };
+
+    const cleanPayload = JSON.parse(JSON.stringify(payload, (key, val) => val === undefined ? null : val));
 
     const triggerPrint = () => {
       if (typeof window !== 'undefined' && (window as any).electronAPI) {
@@ -601,13 +618,13 @@ export default function CashierShiftReportPage() {
       if (existingReportId) {
         // Edit rejected report
         const updatePayload = {
-          ...payload,
+          ...cleanPayload,
           previousSubmission: originalData || null
         };
         await updateDoc(doc(db, "shift_reports", existingReportId), updatePayload);
         submittedId = existingReportId;
       } else {
-        const docRef = await addDoc(collection(db, "shift_reports"), payload);
+        const docRef = await addDoc(collection(db, "shift_reports"), cleanPayload);
         submittedId = docRef.id;
 
         dbService.logAction(
@@ -616,11 +633,11 @@ export default function CashierShiftReportPage() {
           "cashier",
           "Submit Shift Report",
           "N/A",
-          `Shift: ${payload.shift || "N/A"}, Store: ${c?.branchId || c?.storeId || "alamein4"}, Cash: EGP ${payload.cashierCounts?.cash || 0}`
+          `Shift: ${cleanPayload.shift || "N/A"}, Store: ${c?.branchId || c?.storeId || "alamein4"}, Cash: EGP ${cleanPayload.cashierCounts?.cash || 0}`
         ).catch(() => {});
         
         try {
-          const shiftNumber = c?.shift || payload.shift || "1";
+          const shiftNumber = c?.shift || cleanPayload.shift || "1";
           const storeName = c?.branchId || c?.storeId || "Circle K";
           const totalAmt = calculateTotalMoney();
           const cashAmt = calculateTotalCash();
@@ -657,15 +674,19 @@ export default function CashierShiftReportPage() {
       }
       
       // Fire system-wide push and in-app notifications
-      const activeShiftBranch = c?.branchId || c?.storeId || "alamein4";
-      dispatchNotificationSystem({
-        title: `📋 New Shift Report Submitted - ${c?.name || 'Cashier'}`,
-        body: `Store: ${c?.storeId || 'eL-alamein-4'} • Shift: ${c?.shift || 'Standard'}\nTotal Money: EGP ${calculateTotalMoney().toLocaleString()} (Cash: EGP ${calculateTotalCash().toLocaleString()}, Visa: EGP ${visa || 0})`,
-        type: "shift",
-        url: `/shift-reports/view?id=${submittedId}`,
-        branchId: activeShiftBranch,
-        metadata: { cashierName: c?.name, storeId: c?.storeId, shiftId: submittedId }
-      });
+      try {
+        const activeShiftBranch = c?.branchId || c?.storeId || "alamein4";
+        dispatchNotificationSystem({
+          title: `📋 New Shift Report Submitted - ${c?.name || 'Cashier'}`,
+          body: `Store: ${c?.storeId || 'eL-alamein-4'} • Shift: ${c?.shift || 'Standard'}\nTotal Money: EGP ${calculateTotalMoney().toLocaleString()} (Cash: EGP ${calculateTotalCash().toLocaleString()}, Visa: EGP ${visa || 0})`,
+          type: "shift",
+          url: `/shift-reports/view?id=${submittedId}`,
+          branchId: activeShiftBranch,
+          metadata: { cashierName: c?.name, storeId: c?.storeId, shiftId: submittedId }
+        });
+      } catch (notifErr) {
+        console.warn("Shift notification dispatch warning:", notifErr);
+      }
       
       setIsDroppingSafe(true);
 

@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 import { db } from "@/lib/firebase";
-import { doc, onSnapshot, getDoc } from "firebase/firestore";
+import { doc, onSnapshot, getDoc, deleteDoc } from "firebase/firestore";
 import { toast } from "sonner";
 import { usePathname } from "next/navigation";
 
@@ -42,7 +42,7 @@ export function CashierSessionGuard() {
       window.dispatchEvent(new CustomEvent("cashier_session_revoked", { detail: { cashierId, cashierName } }));
 
       toast.error(
-        reasonMessage || "تم حذف هذا الحساب من قبل الإدارة. تم تسجيل الخروج تلقائياً من كافة الأجهزة.",
+        reasonMessage || "تم إنهاء صلاحية هذا الحساب من قبل الإدارة. تم تسجيل الخروج تلقائياً.",
         { duration: 7000 }
       );
 
@@ -72,17 +72,39 @@ export function CashierSessionGuard() {
         terminateCashierSession("تم حذف هذا الحساب من قبل الإدارة. تم تسجيل الخروج تلقائياً.");
         return;
       }
-      const revokedSnap = await getDoc(doc(db, "revoked_cashier_sessions", cashierId)).catch(() => null);
-      if (revokedSnap?.exists()) {
-        terminateCashierSession("تم إنهاء صلاحية هذا الحساب عن بُعد من قبل الإدارة. تم تسجيل الخروج.");
+
+      const cashierData = snap.data();
+      // If marked inactive, immediately kick out
+      if (cashierData?.status === "inactive") {
+        terminateCashierSession("تم إلغاء تفعيل هذا الحساب من قبل الإدارة. تم تسجيل الخروج.");
         return;
       }
+
+      // Account is active: Clean up any stale leftover tombstones from previous deletions
+      const revokedSnap = await getDoc(doc(db, "revoked_cashier_sessions", cashierId)).catch(() => null);
+      if (revokedSnap?.exists()) {
+        const revData = revokedSnap.data();
+        if (revData?.status === "inactive" || (revData?.revokedAt && cashierData?.updatedAt && revData.revokedAt > cashierData.updatedAt)) {
+          terminateCashierSession("تم إنهاء صلاحية هذا الحساب عن بُعد من قبل الإدارة. تم تسجيل الخروج.");
+          return;
+        } else {
+          // Stale tombstone from an old deleted account - clean it up so it never interferes
+          deleteDoc(doc(db, "revoked_cashier_sessions", cashierId)).catch(() => {});
+        }
+      }
+
       if (cashierName) {
         const nameSlug = cashierName.trim().toLowerCase().replace(/\s+/g, "_");
         const revokedNameSnap = await getDoc(doc(db, "revoked_cashier_sessions", `name_${nameSlug}`)).catch(() => null);
         if (revokedNameSnap?.exists()) {
-          terminateCashierSession("تم إنهاء صلاحية هذا الحساب عن بُعد من قبل الإدارة. تم تسجيل الخروج.");
-          return;
+          const revNameData = revokedNameSnap.data();
+          if (revNameData?.status === "inactive" || (revNameData?.revokedAt && cashierData?.updatedAt && revNameData.revokedAt > cashierData.updatedAt)) {
+            terminateCashierSession("تم إنهاء صلاحية هذا الحساب عن بُعد من قبل الإدارة. تم تسجيل الخروج.");
+            return;
+          } else {
+            // Stale name slug tombstone from an old deleted account - auto-purge!
+            deleteDoc(doc(db, "revoked_cashier_sessions", `name_${nameSlug}`)).catch(() => {});
+          }
         }
       }
     }).catch(() => {});
@@ -91,6 +113,8 @@ export function CashierSessionGuard() {
     const unsubCashier = onSnapshot(doc(db, "cashiers", cashierId), (snap) => {
       if (!snap.exists()) {
         terminateCashierSession("تم حذف هذا الحساب من قبل الإدارة. تم تسجيل الخروج من جميع الأجهزة.");
+      } else if (snap.data()?.status === "inactive") {
+        terminateCashierSession("تم إلغاء تفعيل هذا الحساب من قبل الإدارة. تم تسجيل الخروج.");
       }
     }, (err) => {
       console.warn("Cashier guard doc snapshot error:", err);
@@ -99,7 +123,10 @@ export function CashierSessionGuard() {
     // 3. Real-time Firestore snapshot on revoked sessions by ID
     const unsubRevoked = onSnapshot(doc(db, "revoked_cashier_sessions", cashierId), (snap) => {
       if (snap.exists()) {
-        terminateCashierSession("تم إنهاء صلاحية هذا الحساب عن بُعد من قبل الإدارة. تم تسجيل الخروج.");
+        const data = snap.data();
+        if (data?.forceLogout || data?.status === "inactive") {
+          terminateCashierSession("تم إنهاء صلاحية هذا الحساب عن بُعد من قبل الإدارة. تم تسجيل الخروج.");
+        }
       }
     }, (err) => {
       console.warn("Cashier guard revoked snapshot error:", err);
@@ -111,7 +138,10 @@ export function CashierSessionGuard() {
       const nameSlug = cashierName.trim().toLowerCase().replace(/\s+/g, "_");
       unsubRevokedName = onSnapshot(doc(db, "revoked_cashier_sessions", `name_${nameSlug}`), (snap) => {
         if (snap.exists()) {
-          terminateCashierSession("تم إنهاء صلاحية هذا الحساب عن بُعد من قبل الإدارة. تم تسجيل الخروج.");
+          const data = snap.data();
+          if (data?.status === "inactive") {
+            terminateCashierSession("تم إنهاء صلاحية هذا الحساب عن بُعد من قبل الإدارة. تم تسجيل الخروج.");
+          }
         }
       }, (err) => {
         console.warn("Cashier guard revoked name snapshot error:", err);
