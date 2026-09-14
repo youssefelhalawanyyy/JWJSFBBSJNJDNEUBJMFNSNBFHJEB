@@ -298,6 +298,12 @@ service cloud.firestore {
     match /cashiers/{doc} {
       allow read: if true;
       allow write: if request.auth != null;
+      allow update: if request.auth != null || (
+        resource.data.resetPinToken != null &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'pin', 'requirePinChange', 'resetPinToken', 'resetPinRequestedAt', 'pinChangedAt', 'updatedAt'
+        ])
+      );
     }
 
     // ---------- Revoked Cashier Sessions ----------

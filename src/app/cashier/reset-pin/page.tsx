@@ -19,6 +19,8 @@ import {
   Eye,
   EyeOff
 } from "lucide-react";
+import { db } from "@/lib/firebase";
+import { doc, getDoc, updateDoc, deleteDoc, addDoc, collection } from "firebase/firestore";
 import { playSuccessSound, playErrorSound, playPopSound } from "@/lib/sounds";
 
 function ResetPinContent() {
@@ -71,18 +73,57 @@ function ResetPinContent() {
     let isMounted = true;
     (async () => {
       try {
-        const res = await fetch(`/api/cashier/reset-pin?id=${encodeURIComponent(cashierId)}&token=${encodeURIComponent(token)}`);
-        const data = await res.json();
+        // Direct read from Firestore (instant & resilient on mobile & desktop)
+        const snap = await getDoc(doc(db, "cashiers", cashierId));
         if (!isMounted) return;
 
-        if (res.ok && data.valid) {
-          setIsValidToken(true);
-          setCashierData(data.cashier);
+        if (snap.exists()) {
+          const data = snap.data();
+          if (data?.resetPinToken && String(data.resetPinToken).trim() === String(token).trim()) {
+            // Check 48 hours expiration
+            if (data.resetPinRequestedAt) {
+              const reqTime = new Date(data.resetPinRequestedAt).getTime();
+              const hoursElapsed = (Date.now() - reqTime) / (1000 * 60 * 60);
+              if (hoursElapsed > 48) {
+                setIsValidToken(false);
+                setErrorMessage(lang === "ar" ? "انتهت صلاحية هذا الرابط (أكثر من 48 ساعة). يرجى طلب رابط جديد من المدير." : "This reset link has expired (48h limit). Please request a new one from your manager.");
+                return;
+              }
+            }
+
+            setIsValidToken(true);
+            setCashierData({
+              id: snap.id,
+              name: data.name || "الكاشير",
+              branchId: data.branchId || "alamein4",
+              storeId: data.storeId || "Circle K",
+              shiftType: data.shiftType || "All"
+            });
+            return;
+          } else {
+            setIsValidToken(false);
+            setErrorMessage(lang === "ar" ? "الرابط غير صالح أو تم استخدامه مسبقاً وتغيير الرمز." : "This reset link is invalid or has already been used.");
+            return;
+          }
         } else {
           setIsValidToken(false);
-          setErrorMessage(data.message || (lang === "ar" ? "الرابط غير صالح أو انتهت صلاحيته." : "This reset link is invalid or has expired."));
+          setErrorMessage(lang === "ar" ? "حساب الكاشير غير موجود أو تم حذفه." : "Cashier account not found.");
+          return;
         }
       } catch (err: any) {
+        console.warn("Direct verification error, checking API fallback:", err);
+        try {
+          const res = await fetch(`/api/cashier/reset-pin?id=${encodeURIComponent(cashierId)}&token=${encodeURIComponent(token)}`);
+          if (res.ok) {
+            const apiData = await res.json();
+            if (isMounted && apiData.valid) {
+              setIsValidToken(true);
+              setCashierData(apiData.cashier);
+              return;
+            }
+          }
+        } catch {}
+
         if (!isMounted) return;
         setIsValidToken(false);
         setErrorMessage(lang === "ar" ? "تعذر التحقق من الرابط. تحقق من اتصال الإنترنت." : "Failed to verify link. Check internet connection.");
@@ -172,32 +213,72 @@ function ResetPinContent() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [step, newPin, confirmPin, isValidToken, isSuccess, submitting]);
 
-  // Execute reset submission to API
+  // Execute reset submission directly to Firestore with API fallback
   const executePinReset = async (finalPin: string) => {
     setSubmitting(true);
     try {
-      const res = await fetch("/api/cashier/reset-pin", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          cashierId,
-          token,
-          newPin: finalPin
-        })
+      const cashierRef = doc(db, "cashiers", cashierId);
+      const nowIso = new Date().toISOString();
+      const nameSlug = (cashierData?.name || "").trim().toLowerCase().replace(/\s+/g, "_");
+
+      // Direct Firestore update
+      await updateDoc(cashierRef, {
+        pin: finalPin,
+        requirePinChange: false,
+        resetPinToken: null,
+        resetPinRequestedAt: null,
+        pinChangedAt: nowIso,
+        updatedAt: nowIso
       });
 
-      const data = await res.json();
-      if (res.ok && data.success) {
-        try {
-          playSuccessSound();
-        } catch {}
-        setIsSuccess(true);
-      } else {
-        triggerError(data.message || (lang === "ar" ? "فشل حفظ الرمز الجديد." : "Failed to update PIN."));
-        setConfirmPin("");
+      // Clear any session revocation records so cashier can log in immediately
+      await Promise.all([
+        deleteDoc(doc(db, "revoked_cashier_sessions", cashierId)).catch(() => {}),
+        deleteDoc(doc(db, "revoked_cashier_sessions", `name_${nameSlug}`)).catch(() => {})
+      ]);
+
+      // Security audit log
+      await addDoc(collection(db, "audit_logs"), {
+        timestamp: nowIso,
+        action: "CASHIER_PIN_RESET_SELF",
+        category: "SECURITY",
+        cashierId,
+        cashierName: cashierData?.name || "Cashier",
+        details: `Cashier ${cashierData?.name || cashierId} set a new 4-digit PIN via self-service link.`
+      }).catch(() => {});
+
+      try {
+        playSuccessSound();
+      } catch {}
+      setIsSuccess(true);
+    } catch (directErr: any) {
+      console.warn("Direct update failed, trying API route fallback:", directErr);
+      try {
+        const res = await fetch("/api/cashier/reset-pin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            cashierId,
+            token,
+            newPin: finalPin
+          })
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success) {
+            try {
+              playSuccessSound();
+            } catch {}
+            setIsSuccess(true);
+            return;
+          }
+        }
+      } catch (apiErr) {
+        console.error("API route fallback error:", apiErr);
       }
-    } catch (err: any) {
-      triggerError(lang === "ar" ? "حدث خطأ بالاتصال. يرجى المحاولة ثانية." : "Connection error. Please try again.");
+
+      triggerError(lang === "ar" ? "فشل حفظ الرمز الجديد. يرجى المحاولة ثانية." : "Failed to update PIN. Please try again.");
       setConfirmPin("");
     } finally {
       setSubmitting(false);
