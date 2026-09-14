@@ -57,7 +57,8 @@ import {
   QrCode,
   Printer,
   Share2,
-  ExternalLink
+  ExternalLink,
+  KeyRound
 } from "lucide-react";
 
 const QRCode = dynamic(() => import("react-qr-code"), { ssr: false });
@@ -77,6 +78,10 @@ interface CashierProfile {
   shiftType?: string;
   branchId?: string;
   employeeId?: string;
+  requirePinChange?: boolean;
+  resetPinToken?: string;
+  resetPinRequestedAt?: string;
+  pinChangedAt?: string;
   features?: {
     canUseMasterScanner?: boolean;
     [key: string]: any;
@@ -248,6 +253,75 @@ export default function CashierManagementPage() {
     const waUrl = `https://api.whatsapp.com/send?${phoneParam}text=${encoded}`;
     window.open(waUrl, "_blank");
     toast.success(`Opening WhatsApp & copied full credentials for ${cashier.name}!`);
+  };
+
+  // 1-Click WhatsApp PIN Change Request Dispatch
+  const handleSendPinReset = async (cashier: CashierProfile) => {
+    triggerHapticFeedback([20, 35]);
+    playPopSound();
+
+    const toastId = toast.loading(`Generating secure PIN reset link for ${cashier.name}...`);
+
+    try {
+      // 1. Generate unique alphanumeric token
+      const token = Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
+      const nowIso = new Date().toISOString();
+
+      // 2. Update cashier document in Firestore
+      await updateDoc(doc(db, "cashiers", cashier.id), {
+        requirePinChange: true,
+        resetPinToken: token,
+        resetPinRequestedAt: nowIso,
+        updatedAt: nowIso
+      });
+
+      // 3. Format official bilingual WhatsApp dispatch message
+      const isOla = cashier.branchId === "ola" || cashier.storeId?.toLowerCase().includes("ola");
+      const branchName = isOla ? "Circle K - Ola El Koronfol" : "Circle K - El Alamein 4";
+      const resetUrl = `https://anh-zeta.vercel.app/cashier/reset-pin?id=${cashier.id}&token=${token}`;
+
+      const lines = [
+        `مرحباً ${cashier.name}،`,
+        `طلبت إدارة Circle K منك تعيين رمز سري جديد (PIN) لحسابك:`,
+        ``,
+        `🏢 الفرع: ${branchName}`,
+        `🔐 رابط تعيين الرمز السري الجديد:`,
+        `${resetUrl}`,
+        ``,
+        `يرجى الضغط على الرابط وتعيين رمزك السري المكون من 4 أرقام.`,
+        `*الرابط صالح ومخصص لحسابك فقط - يرجى عدم مشاركته.*`
+      ];
+      const message = lines.join("\n");
+
+      // 4. Copy to clipboard
+      if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(message).catch(() => {});
+      }
+
+      // 5. Check if employee has phone number
+      const selectedEmp = employeesList.find(
+        emp => emp.id === cashier.employeeId || emp.name?.trim() === cashier.name?.trim()
+      );
+      let phoneParam = "";
+      if (selectedEmp?.phone) {
+        const digits = String(selectedEmp.phone).replace(/[^0-9]/g, "");
+        if (digits.length >= 9) {
+          const cleanPhone = digits.startsWith("20") ? digits : (digits.startsWith("0") ? "2" + digits : "20" + digits);
+          phoneParam = `phone=${cleanPhone}&`;
+        }
+      }
+
+      // 6. Open WhatsApp
+      const encoded = encodeURIComponent(message);
+      const waUrl = `https://api.whatsapp.com/send?${phoneParam}text=${encoded}`;
+      window.open(waUrl, "_blank");
+
+      toast.dismiss(toastId);
+      toast.success(`PIN reset link created & WhatsApp opened for ${cashier.name}!`);
+    } catch (err: any) {
+      toast.dismiss(toastId);
+      toast.error(`Failed to generate PIN reset: ${err.message || "Unknown error"}`);
+    }
   };
 
   // Unique PIN Generator
@@ -1152,9 +1226,17 @@ export default function CashierManagementPage() {
                         <Lock className="w-4 h-4" />
                       </div>
                       <div>
-                        <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                          Security PIN
-                        </p>
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                            Security PIN
+                          </p>
+                          {cashier.requirePinChange && (
+                            <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 text-[9px] font-bold border border-amber-500/30">
+                              <KeyRound className="w-2.5 h-2.5" />
+                              Reset Sent
+                            </span>
+                          )}
+                        </div>
                         <p className="text-base font-mono font-black tracking-widest text-white mt-0.5">
                           {isRevealed ? (
                             <span className="text-red-400 font-bold bg-red-500/10 px-2 py-0.5 rounded border border-red-500/20">
@@ -1190,7 +1272,7 @@ export default function CashierManagementPage() {
 
                 {/* Footer Action Buttons with WhatsApp & Badge */}
                 <div className="mt-6 pt-4 border-t border-white/10 flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
                     {/* 1-Click WhatsApp Dispatch */}
                     <button
                       onClick={() => handleShareWhatsApp(cashier)}
@@ -1201,10 +1283,20 @@ export default function CashierManagementPage() {
                       <span>WhatsApp</span>
                     </button>
 
+                    {/* 1-Click Send PIN Change Request */}
+                    <button
+                      onClick={() => handleSendPinReset(cashier)}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 font-bold text-xs border border-amber-500/30 transition-all hover:scale-105 active:scale-95 shadow-sm"
+                      title="Send WhatsApp link for cashier to change their PIN"
+                    >
+                      <KeyRound className="w-3.5 h-3.5" />
+                      <span>Reset PIN</span>
+                    </button>
+
                     {/* Printable POS QR Badge */}
                     <button
                       onClick={() => setSelectedBadgeCashier(cashier)}
-                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 font-bold text-xs border border-purple-500/30 transition-all hover:scale-105 active:scale-95 shadow-sm"
+                      className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-xl bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 font-bold text-xs border border-purple-500/30 transition-all hover:scale-105 active:scale-95 shadow-sm"
                       title="Print POS Quick-Login Badge"
                     >
                       <QrCode className="w-3.5 h-3.5" />
@@ -1331,6 +1423,11 @@ export default function CashierManagementPage() {
                           >
                             <Copy className="w-3.5 h-3.5" />
                           </button>
+                          {cashier.requirePinChange && (
+                            <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 text-[10px] font-bold border border-amber-500/30">
+                              Reset Sent
+                            </span>
+                          )}
                         </div>
                       </td>
                       <td className="p-4">
@@ -1377,6 +1474,13 @@ export default function CashierManagementPage() {
                             title="Share credentials on WhatsApp"
                           >
                             <MessageSquare className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleSendPinReset(cashier)}
+                            className="p-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/20 transition-all hover:scale-105"
+                            title="Send WhatsApp Link for Cashier to change their PIN"
+                          >
+                            <KeyRound className="w-4 h-4" />
                           </button>
                           <button
                             onClick={() => setSelectedBadgeCashier(cashier)}
@@ -1645,6 +1749,20 @@ export default function CashierManagementPage() {
                       <Dices className="w-4 h-4 text-purple-400" />
                       <span>Roll PIN</span>
                     </button>
+                    {modalMode === "edit" && editTargetId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const c = cashiers.find(x => x.id === editTargetId);
+                          if (c) handleSendPinReset(c);
+                        }}
+                        className="px-3.5 py-3 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 font-bold text-xs flex items-center gap-1.5 transition-all hover:scale-105 active:scale-95 shadow-md whitespace-nowrap"
+                        title="Send WhatsApp Link for Cashier to change their PIN"
+                      >
+                        <KeyRound className="w-4 h-4 text-amber-400" />
+                        <span>Reset Link</span>
+                      </button>
+                    )}
                   </div>
                 </div>
 

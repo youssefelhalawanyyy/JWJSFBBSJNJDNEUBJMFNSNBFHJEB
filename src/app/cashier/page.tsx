@@ -389,6 +389,19 @@ export default function CashierHubPage() {
       deleteDoc(doc(db, "revoked_cashier_sessions", `name_${nameSlug}`)).catch(() => {})
     ]);
 
+    // Check if management requested this cashier to change their PIN
+    if (user.requirePinChange && user.resetPinToken) {
+      toast.info(
+        lang === "en"
+          ? "Management requires you to change your PIN. Redirecting..."
+          : "تطلب الإدارة منك تعيين رمز سري جديد. جاري التحويل..."
+      );
+      setTimeout(() => {
+        router.push(`/cashier/reset-pin?id=${user.id}&token=${user.resetPinToken}`);
+      }, 500);
+      return;
+    }
+
     playSuccessSound();
     const session = { 
       id: user.id, 
