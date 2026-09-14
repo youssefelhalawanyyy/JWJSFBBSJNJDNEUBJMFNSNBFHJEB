@@ -6,7 +6,7 @@ import { collection, getDocs, deleteDoc, doc, getDoc, onSnapshot } from "firebas
 import { getToken } from "firebase/messaging";
 import { useRouter } from "next/navigation";
 import {
-  Lock, User as UserIcon, ChevronDown, FileText, Shield,
+  Lock, KeyRound, User as UserIcon, ChevronDown, FileText, Shield,
   Calendar as CalendarIcon, UserCircle, Globe, LogOut,
   Download, Bell, Fingerprint, ScanLine, ChevronRight, AlertTriangle,
   ClipboardList, Clock, CheckSquare, LayoutGrid, LayoutDashboard, FileBarChart2, Sparkles, BookOpen, Barcode, Pin, PinOff, Package,
@@ -371,6 +371,19 @@ export default function CashierHubPage() {
       return;
     }
 
+    // Check FIRST if user needs first-time PIN setup or management requested a PIN change
+    if ((!user.pin || user.pin === "PENDING_SETUP" || user.requirePinChange) && user.resetPinToken) {
+      toast.info(
+        lang === "en"
+          ? (!user.pin || user.isFirstTimeSetup ? "Please set your security PIN first. Redirecting..." : "Management requires you to change your PIN. Redirecting...")
+          : (!user.pin || user.isFirstTimeSetup ? "يرجى تعيين رمزك السري لأول مرة للمتابعة. جاري التحويل..." : "تطلب الإدارة منك تعيين رمز سري جديد. جاري التحويل...")
+      );
+      setTimeout(() => {
+        router.push(`/cashier/reset-pin?id=${user.id}&token=${user.resetPinToken}`);
+      }, 400);
+      return;
+    }
+
     const pin = typeof e === "string" ? e : pinInput;
     if (!user.pin || pin !== user.pin) {
       if (navigator.vibrate) navigator.vibrate([50, 50, 50]);
@@ -388,19 +401,6 @@ export default function CashierHubPage() {
       deleteDoc(doc(db, "revoked_cashier_sessions", user.id)).catch(() => {}),
       deleteDoc(doc(db, "revoked_cashier_sessions", `name_${nameSlug}`)).catch(() => {})
     ]);
-
-    // Check if management requested this cashier to change their PIN
-    if (user.requirePinChange && user.resetPinToken) {
-      toast.info(
-        lang === "en"
-          ? "Management requires you to change your PIN. Redirecting..."
-          : "تطلب الإدارة منك تعيين رمز سري جديد. جاري التحويل..."
-      );
-      setTimeout(() => {
-        router.push(`/cashier/reset-pin?id=${user.id}&token=${user.resetPinToken}`);
-      }, 500);
-      return;
-    }
 
     playSuccessSound();
     const session = { 
@@ -819,19 +819,54 @@ export default function CashierHubPage() {
 
           {/* PIN section */}
           <div style={{ padding: "20px 24px 24px" }}>
-            <label style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 10, fontWeight: 700, letterSpacing: "0.15em", color: D.textDim, textTransform: "uppercase", marginBottom: 20 }}>
-              <Lock size={12} color={D.cyan} />
-              {lang === "en" ? "Enter 4-Digit PIN" : "أدخل الرمز السري"}
-            </label>
-            <div className="flex-1 flex flex-col justify-end pb-8">
-              <PinPad onPinChange={(val) => setPinInput(val)} onSubmit={(val) => handleLogin(val as any)} maxLength={4} error={pinError} />
-            </div>
-            {hasFaceIdRegistered && (
-              <button type="button" onClick={() => { playPopSound(); loginWithFaceId(selectedEmployeeId); }} style={{ marginTop: 20, width: "100%", padding: "14px 20px", borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 10, background: D.cyanDim, border: `1px solid ${D.cyanBorder}`, color: D.cyan, fontSize: 14, fontWeight: 700, cursor: "pointer", boxSizing: "border-box" }}>
-                <Fingerprint size={18} color={D.cyan} />
-                {lang === "en" ? "Login with FaceID" : "دخول بالبصمة"}
-              </button>
-            )}
+            {(() => {
+              const selectedUser = employees.find(x => x.id === selectedEmployeeId);
+              const needsInitialSetup = selectedUser && (!selectedUser.pin || selectedUser.pin === "PENDING_SETUP" || selectedUser.isFirstTimeSetup) && selectedUser.resetPinToken;
+
+              if (needsInitialSetup) {
+                return (
+                  <div style={{ textAlign: "center", padding: "16px 8px 24px" }}>
+                    <div style={{ width: 56, height: 56, borderRadius: 20, background: "rgba(34,211,238,0.15)", border: "1px solid rgba(34,211,238,0.3)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px", color: D.cyan }}>
+                      <KeyRound size={26} />
+                    </div>
+                    <h3 style={{ fontSize: 17, fontWeight: 800, color: "#fff", marginBottom: 6 }}>
+                      {lang === "en" ? "First-Time Security PIN Setup" : "تعيين الرمز السري لأول مرة"}
+                    </h3>
+                    <p style={{ fontSize: 12, color: D.textSecondary, marginBottom: 24, lineHeight: 1.6, maxWidth: 300, margin: "0 auto 24px" }}>
+                      {lang === "en" 
+                        ? "Welcome! Please set your personal 4-digit security PIN before logging into your shift." 
+                        : "مرحباً بك! يرجى اختيار وتعيين رمزك السري المكون من 4 أرقام لتسجيل الدخول للوردية."}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => router.push(`/cashier/reset-pin?id=${selectedUser.id}&token=${selectedUser.resetPinToken}`)}
+                      style={{ width: "100%", padding: "16px 20px", borderRadius: 16, background: "linear-gradient(135deg, #06b6d4, #3b82f6)", border: "none", color: "#fff", fontSize: 15, fontWeight: 800, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, boxShadow: "0 4px 20px rgba(6,182,212,0.35)" }}
+                    >
+                      <KeyRound size={18} />
+                      <span>{lang === "en" ? "Create Your PIN Now" : "تعيين الرمز السري الآن"}</span>
+                    </button>
+                  </div>
+                );
+              }
+
+              return (
+                <>
+                  <label style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 10, fontWeight: 700, letterSpacing: "0.15em", color: D.textDim, textTransform: "uppercase", marginBottom: 20 }}>
+                    <Lock size={12} color={D.cyan} />
+                    {lang === "en" ? "Enter 4-Digit PIN" : "أدخل الرمز السري"}
+                  </label>
+                  <div className="flex-1 flex flex-col justify-end pb-8">
+                    <PinPad onPinChange={(val) => setPinInput(val)} onSubmit={(val) => handleLogin(val as any)} maxLength={4} error={pinError} />
+                  </div>
+                  {hasFaceIdRegistered && (
+                    <button type="button" onClick={() => { playPopSound(); loginWithFaceId(selectedEmployeeId); }} style={{ marginTop: 20, width: "100%", padding: "14px 20px", borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 10, background: D.cyanDim, border: `1px solid ${D.cyanBorder}`, color: D.cyan, fontSize: 14, fontWeight: 700, cursor: "pointer", boxSizing: "border-box" }}>
+                      <Fingerprint size={18} color={D.cyan} />
+                      {lang === "en" ? "Login with FaceID" : "دخول بالبصمة"}
+                    </button>
+                  )}
+                </>
+              );
+            })()}
           </div>
         </form>
       </div>

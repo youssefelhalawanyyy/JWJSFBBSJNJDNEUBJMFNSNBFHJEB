@@ -37,7 +37,14 @@ function ResetPinContent() {
   const [validating, setValidating] = useState(true);
   const [isValidToken, setIsValidToken] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
-  const [cashierData, setCashierData] = useState<{ id: string; name: string; branchId: string; storeId: string; shiftType: string } | null>(null);
+  const [cashierData, setCashierData] = useState<{ 
+    id: string; 
+    name: string; 
+    branchId: string; 
+    storeId: string; 
+    shiftType: string;
+    isFirstTime?: boolean;
+  } | null>(null);
 
   // Form states
   const [step, setStep] = useState<1 | 2>(1);
@@ -91,18 +98,20 @@ function ResetPinContent() {
               }
             }
 
+            const isFirstTime = Boolean(data.isFirstTimeSetup || !data.pin);
             setIsValidToken(true);
             setCashierData({
               id: snap.id,
               name: data.name || "الكاشير",
               branchId: data.branchId || "alamein4",
               storeId: data.storeId || "Circle K",
-              shiftType: data.shiftType || "All"
+              shiftType: data.shiftType || "All",
+              isFirstTime
             });
             return;
           } else {
             setIsValidToken(false);
-            setErrorMessage(lang === "ar" ? "الرابط غير صالح أو تم استخدامه مسبقاً وتغيير الرمز." : "This reset link is invalid or has already been used.");
+            setErrorMessage(lang === "ar" ? "الرابط غير صالح أو تم استخدامه مسبقاً وتعيين الرمز." : "This reset link is invalid or has already been used.");
             return;
           }
         } else {
@@ -227,6 +236,7 @@ function ResetPinContent() {
         requirePinChange: false,
         resetPinToken: null,
         resetPinRequestedAt: null,
+        isFirstTimeSetup: false,
         pinChangedAt: nowIso,
         updatedAt: nowIso
       });
@@ -364,15 +374,21 @@ function ResetPinContent() {
             <div className="space-y-2">
               <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-xs font-bold">
                 <Sparkles className="w-3.5 h-3.5" />
-                <span>{lang === "ar" ? "تم التحديث بنجاح" : "Successfully Updated"}</span>
+                <span>
+                  {cashierData?.isFirstTime
+                    ? (lang === "ar" ? "تم إنشاء الرمز بنجاح" : "PIN Created Successfully")
+                    : (lang === "ar" ? "تم التحديث بنجاح" : "Successfully Updated")}
+                </span>
               </div>
               <h2 className="text-2xl font-black text-white">
-                {lang === "ar" ? "تم تعيين رمزك السري الجديد!" : "Your New PIN is Set!"}
+                {cashierData?.isFirstTime
+                  ? (lang === "ar" ? "تم تعيين رمزك السري لأول مرة!" : "Your New PIN is Ready!")
+                  : (lang === "ar" ? "تم تعيين رمزك السري الجديد!" : "Your New PIN is Set!")}
               </h2>
               <p className="text-xs text-slate-300 max-w-xs mx-auto leading-relaxed">
                 {lang === "ar" 
-                  ? `مرحباً ${cashierData?.name}، تم حفظ رمزك السري الجديد بنجاح. يمكنك الآن تسجيل الدخول مباشرة للوردية.` 
-                  : `Welcome ${cashierData?.name}, your security PIN is now updated. You can now log into your shift.`}
+                  ? `مرحباً ${cashierData?.name}، تم حفظ رمزك السري بنجاح. يمكنك الآن تسجيل الدخول مباشرة للوردية.` 
+                  : `Welcome ${cashierData?.name}, your security PIN is now ready. You can now log into your shift.`}
               </p>
             </div>
 
@@ -411,7 +427,7 @@ function ResetPinContent() {
                 step === 1 ? "bg-cyan-500/20 border border-cyan-500/40 text-cyan-300" : "bg-slate-800/60 text-slate-400"
               }`}>
                 <span>1</span>
-                <span>{lang === "ar" ? "الرمز الجديد" : "New PIN"}</span>
+                <span>{lang === "ar" ? (cashierData?.isFirstTime ? "إنشاء الرمز" : "الرمز الجديد") : (cashierData?.isFirstTime ? "Create PIN" : "New PIN")}</span>
               </div>
 
               <div className="w-4 h-[1px] bg-slate-700" />
@@ -427,12 +443,16 @@ function ResetPinContent() {
             {/* Instructions */}
             <h3 className="text-lg font-black text-white text-center mb-1">
               {step === 1 
-                ? (lang === "ar" ? "أدخل الرمز السري الجديد (4 أرقام)" : "Enter Your New 4-Digit PIN")
+                ? (cashierData?.isFirstTime
+                    ? (lang === "ar" ? "اختر رمزك السري الجديد (4 أرقام)" : "Choose Your 4-Digit Security PIN")
+                    : (lang === "ar" ? "أدخل الرمز السري الجديد (4 أرقام)" : "Enter Your New 4-Digit PIN"))
                 : (lang === "ar" ? "أعد إدخال الرمز للتأكيد" : "Re-enter PIN to Confirm")}
             </h3>
             <p className="text-xs text-slate-400 text-center mb-6">
               {step === 1
-                ? (lang === "ar" ? "يرجى اختيار رمز سري لا يسهل تخمينه" : "Choose a secure 4-digit code for your register")
+                ? (cashierData?.isFirstTime
+                    ? (lang === "ar" ? "اختر رمزاً سرياً خاصاً بك لتسجيل الدخول للورديات" : "Choose a private 4-digit code to log into your register shifts")
+                    : (lang === "ar" ? "يرجى اختيار رمز سري لا يسهل تخمينه" : "Choose a secure 4-digit code for your register"))
                 : (lang === "ar" ? "تأكد من مطابقة الأرقام الأربعة" : "Ensure both PIN entries match perfectly")}
             </p>
 

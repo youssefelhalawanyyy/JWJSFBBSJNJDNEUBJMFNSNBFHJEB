@@ -82,6 +82,7 @@ interface CashierProfile {
   resetPinToken?: string;
   resetPinRequestedAt?: string;
   pinChangedAt?: string;
+  isFirstTimeSetup?: boolean;
   features?: {
     canUseMasterScanner?: boolean;
     [key: string]: any;
@@ -145,7 +146,8 @@ export default function CashierManagementPage() {
     status: "active" as "active" | "inactive",
     shiftType: "All",
     employeeId: "",
-    canUseMasterScanner: false
+    canUseMasterScanner: false,
+    pinMode: "self_service" as "self_service" | "manual"
   });
 
   // Keep branch filter in sync with global branch if changed
@@ -207,6 +209,12 @@ export default function CashierManagementPage() {
     triggerHapticFeedback([15, 30]);
     playPopSound();
 
+    // If cashier hasn't set a PIN yet, or has pending PIN setup/change, send the PIN setup link!
+    if (!cashier.pin || cashier.isFirstTimeSetup || (cashier.requirePinChange && cashier.resetPinToken)) {
+      handleSendPinReset(cashier);
+      return;
+    }
+
     const isOla = cashier.branchId === "ola" || cashier.storeId?.toLowerCase().includes("ola");
     const branchName = isOla ? "Circle K - Ola El Koronfol" : "Circle K - El Alamein 4";
 
@@ -255,12 +263,17 @@ export default function CashierManagementPage() {
     toast.success(`Opening WhatsApp & copied full credentials for ${cashier.name}!`);
   };
 
-  // 1-Click WhatsApp PIN Change Request Dispatch
+  // 1-Click WhatsApp PIN Setup / Reset Request Dispatch
   const handleSendPinReset = async (cashier: CashierProfile) => {
     triggerHapticFeedback([20, 35]);
     playPopSound();
 
-    const toastId = toast.loading(`Generating secure PIN reset link for ${cashier.name}...`);
+    const isFirstTime = Boolean(cashier.isFirstTimeSetup || !cashier.pin);
+    const toastId = toast.loading(
+      isFirstTime 
+        ? `Generating first-time PIN setup link for ${cashier.name}...` 
+        : `Generating secure PIN reset link for ${cashier.name}...`
+    );
 
     try {
       // 1. Generate unique alphanumeric token
@@ -272,15 +285,33 @@ export default function CashierManagementPage() {
         requirePinChange: true,
         resetPinToken: token,
         resetPinRequestedAt: nowIso,
+        isFirstTimeSetup: isFirstTime,
         updatedAt: nowIso
       });
 
       // 3. Format official bilingual WhatsApp dispatch message
       const isOla = cashier.branchId === "ola" || cashier.storeId?.toLowerCase().includes("ola");
       const branchName = isOla ? "Circle K - Ola El Koronfol" : "Circle K - El Alamein 4";
+      let shiftName = "جميع الورديات (All Shifts)";
+      if (cashier.shiftType === "Morning") shiftName = "وردية صباحية (Morning Shift)";
+      else if (cashier.shiftType === "Noon") shiftName = "وردية مسائية (Noon Shift)";
+      else if (cashier.shiftType === "Night") shiftName = "وردية ليلية (Night Shift)";
+
       const resetUrl = `https://anh-zeta.vercel.app/cashier/reset-pin?id=${cashier.id}&token=${token}`;
 
-      const lines = [
+      const lines = isFirstTime ? [
+        `مرحباً ${cashier.name}،`,
+        `تم إنشاء وتجهيز حسابك لنظام كاشير Circle K:`,
+        ``,
+        `🏢 الفرع: ${branchName}`,
+        `⏱️ الوردية: ${shiftName}`,
+        ``,
+        `🔐 يرجى تعيين الرمز السري (PIN) الخاص بك لأول مرة عبر الرابط التالي:`,
+        `${resetUrl}`,
+        ``,
+        `يرجى الضغط على الرابط واختيار 4 أرقام لتسجيل الدخول للورديات.`,
+        `*الرابط صالح ومخصص لحسابك فقط - يرجى عدم مشاركته.*`
+      ] : [
         `مرحباً ${cashier.name}،`,
         `طلبت إدارة Circle K منك تعيين رمز سري جديد (PIN) لحسابك:`,
         ``,
@@ -317,10 +348,14 @@ export default function CashierManagementPage() {
       window.open(waUrl, "_blank");
 
       toast.dismiss(toastId);
-      toast.success(`PIN reset link created & WhatsApp opened for ${cashier.name}!`);
+      toast.success(
+        isFirstTime 
+          ? `First-time PIN setup link created & WhatsApp opened for ${cashier.name}!` 
+          : `PIN reset link created & WhatsApp opened for ${cashier.name}!`
+      );
     } catch (err: any) {
       toast.dismiss(toastId);
-      toast.error(`Failed to generate PIN reset: ${err.message || "Unknown error"}`);
+      toast.error(`Failed to generate PIN setup link: ${err.message || "Unknown error"}`);
     }
   };
 
@@ -380,11 +415,12 @@ export default function CashierManagementPage() {
       name: "",
       branchId: initialBranch,
       storeId: initialBranch === "ola" ? "ola-el-koronfol" : "eL-alamein-4",
-      pin: Math.floor(1000 + Math.random() * 9000).toString(),
+      pin: "",
       status: "active",
       shiftType: "All",
       employeeId: "",
-      canUseMasterScanner: true
+      canUseMasterScanner: true,
+      pinMode: "self_service"
     });
     setIsModalOpen(true);
   };
@@ -407,7 +443,8 @@ export default function CashierManagementPage() {
       status: cashier.status || "active",
       shiftType: cashier.shiftType || "All",
       employeeId: cashier.employeeId || "",
-      canUseMasterScanner: Boolean(cashier.features?.canUseMasterScanner)
+      canUseMasterScanner: Boolean(cashier.features?.canUseMasterScanner),
+      pinMode: "manual"
     });
     setIsModalOpen(true);
   };
@@ -425,16 +462,20 @@ export default function CashierManagementPage() {
       return;
     }
 
-    if (!formData.pin || formData.pin.length !== 4 || !/^\d{4}$/.test(formData.pin)) {
-      toast.error("PIN must be exactly 4 numeric digits.");
-      return;
-    }
+    const isSelfService = modalMode === "add" && formData.pinMode === "self_service";
 
-    // Check PIN uniqueness
-    const duplicatePin = cashiers.find(c => c.pin === formData.pin && c.id !== editTargetId);
-    if (duplicatePin) {
-      toast.error(`PIN ${formData.pin} is already assigned to ${duplicatePin.name}. Please roll a unique PIN.`);
-      return;
+    if (!isSelfService) {
+      if (!formData.pin || formData.pin.length !== 4 || !/^\d{4}$/.test(formData.pin)) {
+        toast.error("PIN must be exactly 4 numeric digits.");
+        return;
+      }
+
+      // Check PIN uniqueness
+      const duplicatePin = cashiers.find(c => c.pin === formData.pin && c.id !== editTargetId);
+      if (duplicatePin) {
+        toast.error(`PIN ${formData.pin} is already assigned to ${duplicatePin.name}. Please roll a unique PIN.`);
+        return;
+      }
     }
 
     setSubmitting(true);
@@ -444,20 +485,31 @@ export default function CashierManagementPage() {
       const selectedEmp = employeesList.find(emp => emp.name === formData.name);
       const resolvedEmpId = selectedEmp ? selectedEmp.id : formData.employeeId;
       const nameSlug = formData.name.trim().toLowerCase().replace(/\s+/g, "_");
+      const nowIso = new Date().toISOString();
+      const setupToken = Math.random().toString(36).substring(2, 10) + Date.now().toString(36);
 
-      const payload = {
+      const payload: any = {
         name: formData.name.trim(),
         branchId: formData.branchId,
         storeId: formData.storeId.trim(),
-        pin: formData.pin,
         status: formData.status || "active",
         shiftType: formData.shiftType,
         employeeId: resolvedEmpId || "",
         features: {
           canUseMasterScanner: formData.canUseMasterScanner
         },
-        updatedAt: new Date().toISOString()
+        updatedAt: nowIso
       };
+
+      if (isSelfService) {
+        payload.pin = "";
+        payload.requirePinChange = true;
+        payload.resetPinToken = setupToken;
+        payload.resetPinRequestedAt = nowIso;
+        payload.isFirstTimeSetup = true;
+      } else {
+        payload.pin = formData.pin;
+      }
 
       let savedRecord: CashierProfile;
 
@@ -475,7 +527,7 @@ export default function CashierManagementPage() {
       } else {
         const docRef = await addDoc(collection(db, "cashiers"), {
           ...payload,
-          createdAt: new Date().toISOString()
+          createdAt: nowIso
         });
         savedRecord = { id: docRef.id, ...payload };
         // Clean any old revoked session tombstones for this name and ID!
@@ -1230,41 +1282,58 @@ export default function CashierManagementPage() {
                           <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
                             Security PIN
                           </p>
-                          {cashier.requirePinChange && (
+                          {cashier.requirePinChange && cashier.pin && !cashier.isFirstTimeSetup && (
                             <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 text-[9px] font-bold border border-amber-500/30">
                               <KeyRound className="w-2.5 h-2.5" />
                               Reset Sent
                             </span>
                           )}
                         </div>
-                        <p className="text-base font-mono font-black tracking-widest text-white mt-0.5">
-                          {isRevealed ? (
-                            <span className="text-red-400 font-bold bg-red-500/10 px-2 py-0.5 rounded border border-red-500/20">
+                        <div className="mt-0.5">
+                          {!cashier.pin || cashier.isFirstTimeSetup ? (
+                            <span className="inline-flex items-center gap-1 text-xs font-bold text-amber-300 bg-amber-500/15 px-2.5 py-1 rounded-xl border border-amber-500/30">
+                              <KeyRound className="w-3.5 h-3.5" />
+                              <span>Pending PIN Setup</span>
+                            </span>
+                          ) : isRevealed ? (
+                            <span className="text-red-400 font-mono font-bold bg-red-500/10 px-2 py-0.5 rounded border border-red-500/20 text-base tracking-widest">
                               {cashier.pin}
                             </span>
                           ) : (
-                            <span className="text-slate-400 select-none">••••</span>
+                            <span className="text-slate-400 font-mono font-black select-none text-base tracking-widest">••••</span>
                           )}
-                        </p>
+                        </div>
                       </div>
                     </div>
 
                     {/* PIN Actions (Reveal & Copy) */}
                     <div className="flex items-center gap-1.5">
-                      <button
-                        onClick={() => togglePinReveal(cashier.id)}
-                        className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white border border-white/5 transition-colors"
-                        title={isRevealed ? "Hide PIN" : "Reveal PIN"}
-                      >
-                        {isRevealed ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </button>
-                      <button
-                        onClick={() => handleCopyPin(cashier.pin, cashier.id)}
-                        className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white border border-white/5 transition-colors"
-                        title="Copy PIN to clipboard"
-                      >
-                        {isCopied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
-                      </button>
+                      {cashier.pin && !cashier.isFirstTimeSetup ? (
+                        <>
+                          <button
+                            onClick={() => togglePinReveal(cashier.id)}
+                            className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white border border-white/5 transition-colors"
+                            title={isRevealed ? "Hide PIN" : "Reveal PIN"}
+                          >
+                            {isRevealed ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          </button>
+                          <button
+                            onClick={() => handleCopyPin(cashier.pin, cashier.id)}
+                            className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white border border-white/5 transition-colors"
+                            title="Copy PIN to clipboard"
+                          >
+                            {isCopied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => handleSendPinReset(cashier)}
+                          className="p-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 transition-colors"
+                          title="Send WhatsApp Link for Cashier to set their PIN"
+                        >
+                          <KeyRound className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                   </div>
 
@@ -1408,22 +1477,31 @@ export default function CashierManagementPage() {
                       </td>
                       <td className="p-4">
                         <div className="flex items-center gap-2">
-                          <span className="font-mono font-bold text-slate-300">
-                            {isRevealed ? cashier.pin : "••••"}
-                          </span>
-                          <button
-                            onClick={() => togglePinReveal(cashier.id)}
-                            className="text-slate-400 hover:text-white"
-                          >
-                            {isRevealed ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                          </button>
-                          <button
-                            onClick={() => handleCopyPin(cashier.pin, cashier.id)}
-                            className="text-slate-400 hover:text-white"
-                          >
-                            <Copy className="w-3.5 h-3.5" />
-                          </button>
-                          {cashier.requirePinChange && (
+                          {!cashier.pin || cashier.isFirstTimeSetup ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-300 bg-amber-500/15 px-2 py-0.5 rounded-lg border border-amber-500/30">
+                              <KeyRound className="w-3 h-3" />
+                              <span>Pending Setup</span>
+                            </span>
+                          ) : (
+                            <>
+                              <span className="font-mono font-bold text-slate-300">
+                                {isRevealed ? cashier.pin : "••••"}
+                              </span>
+                              <button
+                                onClick={() => togglePinReveal(cashier.id)}
+                                className="text-slate-400 hover:text-white"
+                              >
+                                {isRevealed ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                              </button>
+                              <button
+                                onClick={() => handleCopyPin(cashier.pin, cashier.id)}
+                                className="text-slate-400 hover:text-white"
+                              >
+                                <Copy className="w-3.5 h-3.5" />
+                              </button>
+                            </>
+                          )}
+                          {cashier.requirePinChange && cashier.pin && !cashier.isFirstTimeSetup && (
                             <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 text-[10px] font-bold border border-amber-500/30">
                               Reset Sent
                             </span>
@@ -1720,51 +1798,118 @@ export default function CashierManagementPage() {
                   </label>
                 </div>
 
-                {/* 5. 4-Digit Security PIN */}
-                <div className="space-y-2">
-                  <label className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center justify-between">
-                    <span className="flex items-center gap-1.5">
-                      <Lock className="w-3.5 h-3.5 text-red-400" />
-                      4-Digit Security PIN
-                    </span>
-                    <span className="text-[10px] text-slate-400">Unique identifier for shift entry</span>
-                  </label>
-                  <div className="flex gap-3">
-                    <input
-                      required
-                      type="text"
-                      pattern="[0-9]{4}"
-                      maxLength={4}
-                      value={formData.pin}
-                      onChange={(e) => setFormData({ ...formData, pin: e.target.value.replace(/\D/g, "").slice(0, 4) })}
-                      placeholder="1234"
-                      className="flex-1 px-4 py-3 rounded-xl bg-[#090d18] border border-white/15 text-white font-mono font-black text-2xl tracking-[0.5em] text-center focus:outline-none focus:border-red-500/60 focus:ring-2 focus:ring-red-500/20"
-                    />
-                    <button
-                      type="button"
-                      onClick={generateUniquePin}
-                      className="px-4 py-3 rounded-xl bg-gradient-to-r from-purple-600/20 to-indigo-600/20 hover:from-purple-600/30 hover:to-indigo-600/30 border border-purple-500/30 text-purple-300 font-bold text-xs flex items-center gap-2 transition-all hover:scale-105 active:scale-95 shadow-md"
-                      title="Generate Unique Random PIN"
-                    >
-                      <Dices className="w-4 h-4 text-purple-400" />
-                      <span>Roll PIN</span>
-                    </button>
-                    {modalMode === "edit" && editTargetId && (
+                {/* 5. Security PIN: Self-Service vs Manual */}
+                {modalMode === "add" ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                        <Lock className="w-3.5 h-3.5 text-cyan-400" />
+                        Security PIN Setup
+                      </label>
                       <button
                         type="button"
                         onClick={() => {
-                          const c = cashiers.find(x => x.id === editTargetId);
-                          if (c) handleSendPinReset(c);
+                          const nextMode = formData.pinMode === "self_service" ? "manual" : "self_service";
+                          setFormData({
+                            ...formData,
+                            pinMode: nextMode,
+                            pin: nextMode === "manual" ? Math.floor(1000 + Math.random() * 9000).toString() : ""
+                          });
                         }}
-                        className="px-3.5 py-3 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 font-bold text-xs flex items-center gap-1.5 transition-all hover:scale-105 active:scale-95 shadow-md whitespace-nowrap"
-                        title="Send WhatsApp Link for Cashier to change their PIN"
+                        className="text-[11px] font-bold text-cyan-400 hover:text-cyan-300 underline cursor-pointer"
                       >
-                        <KeyRound className="w-4 h-4 text-amber-400" />
-                        <span>Reset Link</span>
+                        {formData.pinMode === "self_service" ? "Or set PIN manually" : "Switch to self-service PIN"}
                       </button>
+                    </div>
+
+                    {formData.pinMode === "self_service" ? (
+                      <div className="p-4 rounded-2xl bg-gradient-to-r from-cyan-500/10 via-blue-500/10 to-purple-500/10 border border-cyan-500/30 space-y-2 text-right" dir="rtl">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-xl bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 flex items-center justify-center font-bold">
+                            <KeyRound className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <p className="text-sm font-bold text-white">الرمز السري: يحدده الكاشير بنفسه</p>
+                            <p className="text-[10px] text-cyan-300">Self-Service PIN Creation via WhatsApp</p>
+                          </div>
+                        </div>
+                        <p className="text-xs text-slate-300 leading-relaxed">
+                          لن تحتاج لكتابة رمز سري. سيقوم النظام بإنشاء الحساب وإعداد رابط تفعيل خاص بالكاشير لإرساله عبر واتساب، ليقوم باختيار رمزه السري وتأكيده بنفسه لأول مرة.
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <div className="flex gap-3">
+                          <input
+                            required
+                            type="text"
+                            pattern="[0-9]{4}"
+                            maxLength={4}
+                            value={formData.pin}
+                            onChange={(e) => setFormData({ ...formData, pin: e.target.value.replace(/\D/g, "").slice(0, 4) })}
+                            placeholder="1234"
+                            className="flex-1 px-4 py-3 rounded-xl bg-[#090d18] border border-white/15 text-white font-mono font-black text-2xl tracking-[0.5em] text-center focus:outline-none focus:border-red-500/60 focus:ring-2 focus:ring-red-500/20"
+                          />
+                          <button
+                            type="button"
+                            onClick={generateUniquePin}
+                            className="px-4 py-3 rounded-xl bg-gradient-to-r from-purple-600/20 to-indigo-600/20 hover:from-purple-600/30 hover:to-indigo-600/30 border border-purple-500/30 text-purple-300 font-bold text-xs flex items-center gap-2 transition-all hover:scale-105 active:scale-95 shadow-md"
+                            title="Generate Unique Random PIN"
+                          >
+                            <Dices className="w-4 h-4 text-purple-400" />
+                            <span>Roll PIN</span>
+                          </button>
+                        </div>
+                      </div>
                     )}
                   </div>
-                </div>
+                ) : (
+                  /* Edit Mode */
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <Lock className="w-3.5 h-3.5 text-red-400" />
+                        4-Digit Security PIN
+                      </span>
+                      <span className="text-[10px] text-slate-400">Unique identifier for shift entry</span>
+                    </label>
+                    <div className="flex gap-3">
+                      <input
+                        required
+                        type="text"
+                        pattern="[0-9]{4}"
+                        maxLength={4}
+                        value={formData.pin}
+                        onChange={(e) => setFormData({ ...formData, pin: e.target.value.replace(/\D/g, "").slice(0, 4) })}
+                        placeholder="1234"
+                        className="flex-1 px-4 py-3 rounded-xl bg-[#090d18] border border-white/15 text-white font-mono font-black text-2xl tracking-[0.5em] text-center focus:outline-none focus:border-red-500/60 focus:ring-2 focus:ring-red-500/20"
+                      />
+                      <button
+                        type="button"
+                        onClick={generateUniquePin}
+                        className="px-4 py-3 rounded-xl bg-gradient-to-r from-purple-600/20 to-indigo-600/20 hover:from-purple-600/30 hover:to-indigo-600/30 border border-purple-500/30 text-purple-300 font-bold text-xs flex items-center gap-2 transition-all hover:scale-105 active:scale-95 shadow-md"
+                        title="Generate Unique Random PIN"
+                      >
+                        <Dices className="w-4 h-4 text-purple-400" />
+                        <span>Roll PIN</span>
+                      </button>
+                      {editTargetId && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const c = cashiers.find(x => x.id === editTargetId);
+                            if (c) handleSendPinReset(c);
+                          }}
+                          className="px-3.5 py-3 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 font-bold text-xs flex items-center gap-1.5 transition-all hover:scale-105 active:scale-95 shadow-md whitespace-nowrap"
+                          title="Send WhatsApp Link for Cashier to change their PIN"
+                        >
+                          <KeyRound className="w-4 h-4 text-amber-400" />
+                          <span>Reset Link</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {/* 6. Account Status (Portal Access) */}
                 <div className="p-4 rounded-2xl bg-[#090d18] border border-white/10 flex items-center justify-between">
@@ -1853,86 +1998,155 @@ export default function CashierManagementPage() {
               exit={{ opacity: 0, scale: 0.9, y: 20 }}
               className="relative w-full max-w-md rounded-3xl bg-gradient-to-b from-[#141d33] to-[#0c1221] border border-emerald-500/30 p-6 sm:p-8 shadow-[0_0_60px_rgba(16,185,129,0.25)] text-center text-white space-y-6"
             >
-              <div className="w-16 h-16 rounded-3xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center mx-auto text-emerald-400 shadow-inner">
-                <CheckCircle2 className="w-8 h-8" />
-              </div>
+              {justSavedCashier.isFirstTimeSetup || !justSavedCashier.pin ? (
+                <>
+                  <div className="w-16 h-16 rounded-3xl bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center mx-auto text-cyan-400 shadow-inner">
+                    <KeyRound className="w-8 h-8" />
+                  </div>
 
-              <div>
-                <h3 className="text-2xl font-black text-white">Cashier Account Ready!</h3>
-                <p className="text-sm text-slate-300 mt-1 font-semibold">
-                  {justSavedCashier.name}
-                </p>
-                <p className="text-xs text-slate-400 mt-1">
-                  Security PIN: <span className="font-mono font-bold text-red-400 tracking-widest">{justSavedCashier.pin}</span>
-                </p>
-              </div>
+                  <div>
+                    <h3 className="text-2xl font-black text-white">تم إنشاء حساب الكاشير!</h3>
+                    <p className="text-sm text-slate-300 mt-1 font-semibold">
+                      {justSavedCashier.name}
+                    </p>
+                    <div className="mt-2.5 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-500/15 border border-cyan-500/30 text-cyan-300 text-xs font-bold">
+                      <Sparkles className="w-3.5 h-3.5" />
+                      <span>الكاشير سيقوم بتعيين الرمز السري بنفسه</span>
+                    </div>
+                  </div>
 
-              <div className="space-y-2.5">
-                {/* 1-Click WhatsApp Send */}
-                <button
-                  onClick={() => {
-                    handleShareWhatsApp(justSavedCashier);
-                  }}
-                  className="w-full py-3.5 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-600/30 transition-all active:scale-95"
-                >
-                  <MessageSquare className="w-4 h-4" />
-                  <span>Send Credentials via WhatsApp</span>
-                </button>
+                  <div className="space-y-2.5">
+                    {/* 1-Click WhatsApp Setup Link */}
+                    <button
+                      onClick={() => {
+                        handleSendPinReset(justSavedCashier);
+                      }}
+                      className="w-full py-3.5 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-600/30 transition-all active:scale-95"
+                    >
+                      <MessageSquare className="w-4 h-4" />
+                      <span>إرسال رابط التفعيل عبر واتساب</span>
+                    </button>
 
-                {/* Copy Formatted Credentials Button */}
-                <button
-                  onClick={() => {
-                    const isOla = justSavedCashier.branchId === "ola" || justSavedCashier.storeId?.toLowerCase().includes("ola");
-                    const branchName = isOla ? "Circle K - Ola El Koronfol" : "Circle K - El Alamein 4";
-                    let shiftName = "جميع الورديات (All Shifts)";
-                    if (justSavedCashier.shiftType === "Morning") shiftName = "وردية صباحية (Morning Shift)";
-                    else if (justSavedCashier.shiftType === "Noon") shiftName = "وردية مسائية (Noon Shift)";
-                    else if (justSavedCashier.shiftType === "Night") shiftName = "وردية ليلية (Night Shift)";
+                    {/* Copy Setup Link */}
+                    <button
+                      onClick={() => {
+                        const resetUrl = `https://anh-zeta.vercel.app/cashier/reset-pin?id=${justSavedCashier.id}&token=${justSavedCashier.resetPinToken}`;
+                        if (navigator.clipboard && navigator.clipboard.writeText) {
+                          navigator.clipboard.writeText(resetUrl);
+                        }
+                        toast.success("Setup link copied to clipboard!");
+                      }}
+                      className="w-full py-2.5 px-4 rounded-2xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-xs flex items-center justify-center gap-2 transition-all active:scale-95"
+                    >
+                      <Copy className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>نسخ رابط التفعيل</span>
+                    </button>
 
-                    const msg = [
-                      `مرحباً ${justSavedCashier.name}،`,
-                      `تم تجهيز حسابك لنظام كاشير Circle K:`,
-                      ``,
-                      `🏢 الفرع: ${branchName}`,
-                      `🔒 الرمز السري (PIN): ${justSavedCashier.pin}`,
-                      `⏱️ الوردية المسموحة: ${shiftName}`,
-                      ``,
-                      `🔗 رابط تسجيل الدخول:`,
-                      `https://anh-zeta.vercel.app/cashier`,
-                      ``,
-                      `*يرجى الحفاظ على سرية هذا الرمز وعدم مشاركته.*`
-                    ].join("\n");
-                    if (navigator.clipboard && navigator.clipboard.writeText) {
-                      navigator.clipboard.writeText(msg);
-                    }
-                    toast.success("Full credentials copied to clipboard!");
-                  }}
-                  className="w-full py-2.5 px-4 rounded-2xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-xs flex items-center justify-center gap-2 transition-all active:scale-95"
-                >
-                  <Copy className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Copy Credentials Message</span>
-                </button>
+                    {/* Print Badge */}
+                    <button
+                      onClick={() => {
+                        const c = justSavedCashier;
+                        setJustSavedCashier(null);
+                        setSelectedBadgeCashier(c);
+                      }}
+                      className="w-full py-3 px-4 rounded-2xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/30 text-purple-300 font-bold text-sm flex items-center justify-center gap-2 transition-all"
+                    >
+                      <QrCode className="w-4 h-4" />
+                      <span>طباعة شارة الكاشير (Badge)</span>
+                    </button>
 
-                {/* Print Badge Button */}
-                <button
-                  onClick={() => {
-                    const c = justSavedCashier;
-                    setJustSavedCashier(null);
-                    setSelectedBadgeCashier(c);
-                  }}
-                  className="w-full py-3 px-4 rounded-2xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/30 text-purple-300 font-bold text-sm flex items-center justify-center gap-2 transition-all"
-                >
-                  <QrCode className="w-4 h-4" />
-                  <span>Print POS Login Badge</span>
-                </button>
+                    <button
+                      onClick={() => setJustSavedCashier(null)}
+                      className="w-full py-2.5 text-xs text-slate-400 hover:text-white transition-colors"
+                    >
+                      إغلاق
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="w-16 h-16 rounded-3xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center mx-auto text-emerald-400 shadow-inner">
+                    <CheckCircle2 className="w-8 h-8" />
+                  </div>
 
-                <button
-                  onClick={() => setJustSavedCashier(null)}
-                  className="w-full py-2.5 text-xs text-slate-400 hover:text-white transition-colors"
-                >
-                  Close
-                </button>
-              </div>
+                  <div>
+                    <h3 className="text-2xl font-black text-white">Cashier Account Ready!</h3>
+                    <p className="text-sm text-slate-300 mt-1 font-semibold">
+                      {justSavedCashier.name}
+                    </p>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Security PIN: <span className="font-mono font-bold text-red-400 tracking-widest">{justSavedCashier.pin}</span>
+                    </p>
+                  </div>
+
+                  <div className="space-y-2.5">
+                    {/* 1-Click WhatsApp Send */}
+                    <button
+                      onClick={() => {
+                        handleShareWhatsApp(justSavedCashier);
+                      }}
+                      className="w-full py-3.5 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-600/30 transition-all active:scale-95"
+                    >
+                      <MessageSquare className="w-4 h-4" />
+                      <span>Send Credentials via WhatsApp</span>
+                    </button>
+
+                    {/* Copy Formatted Credentials Button */}
+                    <button
+                      onClick={() => {
+                        const isOla = justSavedCashier.branchId === "ola" || justSavedCashier.storeId?.toLowerCase().includes("ola");
+                        const branchName = isOla ? "Circle K - Ola El Koronfol" : "Circle K - El Alamein 4";
+                        let shiftName = "جميع الورديات (All Shifts)";
+                        if (justSavedCashier.shiftType === "Morning") shiftName = "وردية صباحية (Morning Shift)";
+                        else if (justSavedCashier.shiftType === "Noon") shiftName = "وردية مسائية (Noon Shift)";
+                        else if (justSavedCashier.shiftType === "Night") shiftName = "وردية ليلية (Night Shift)";
+
+                        const msg = [
+                          `مرحباً ${justSavedCashier.name}،`,
+                          `تم تجهيز حسابك لنظام كاشير Circle K:`,
+                          ``,
+                          `🏢 الفرع: ${branchName}`,
+                          `🔒 الرمز السري (PIN): ${justSavedCashier.pin}`,
+                          `⏱️ الوردية المسموحة: ${shiftName}`,
+                          ``,
+                          `🔗 رابط تسجيل الدخول:`,
+                          `https://anh-zeta.vercel.app/cashier`,
+                          ``,
+                          `*يرجى الحفاظ على سرية هذا الرمز وعدم مشاركته.*`
+                        ].join("\n");
+                        if (navigator.clipboard && navigator.clipboard.writeText) {
+                          navigator.clipboard.writeText(msg);
+                        }
+                        toast.success("Full credentials copied to clipboard!");
+                      }}
+                      className="w-full py-2.5 px-4 rounded-2xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-xs flex items-center justify-center gap-2 transition-all active:scale-95"
+                    >
+                      <Copy className="w-3.5 h-3.5 text-cyan-400" />
+                      <span>Copy Credentials Message</span>
+                    </button>
+
+                    {/* Print Badge Button */}
+                    <button
+                      onClick={() => {
+                        const c = justSavedCashier;
+                        setJustSavedCashier(null);
+                        setSelectedBadgeCashier(c);
+                      }}
+                      className="w-full py-3 px-4 rounded-2xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/30 text-purple-300 font-bold text-sm flex items-center justify-center gap-2 transition-all"
+                    >
+                      <QrCode className="w-4 h-4" />
+                      <span>Print POS Login Badge</span>
+                    </button>
+
+                    <button
+                      onClick={() => setJustSavedCashier(null)}
+                      className="w-full py-2.5 text-xs text-slate-400 hover:text-white transition-colors"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </>
+              )}
             </motion.div>
           </div>
         )}

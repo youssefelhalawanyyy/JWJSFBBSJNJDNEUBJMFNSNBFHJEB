@@ -301,7 +301,7 @@ service cloud.firestore {
       allow update: if request.auth != null || (
         resource.data.resetPinToken != null &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'pin', 'requirePinChange', 'resetPinToken', 'resetPinRequestedAt', 'pinChangedAt', 'updatedAt'
+          'pin', 'requirePinChange', 'resetPinToken', 'resetPinRequestedAt', 'isFirstTimeSetup', 'pinChangedAt', 'updatedAt'
         ])
       );
     }
