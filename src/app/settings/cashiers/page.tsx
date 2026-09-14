@@ -210,17 +210,44 @@ export default function CashierManagementPage() {
     else if (cashier.shiftType === "Noon") shiftName = "وردية مسائية (Noon Shift)";
     else if (cashier.shiftType === "Night") shiftName = "وردية ليلية (Night Shift)";
 
-    const message = `مرحباً ${cashier.name}، 
-تم تجهيز حسابك لنظام كاشير Circle K:
-🏢 الفرع: ${branchName}
-🔒 الرمز السري (PIN): ${cashier.pin}
-⏱️ الوردية المسموحة: ${shiftName}
-🔗 الرابط: https://anh-zeta.vercel.app/cashier
-*يرجى الحفاظ على سرية هذا الرمز وعدم مشاركته.*`;
+    const lines = [
+      `مرحباً ${cashier.name}،`,
+      `تم تجهيز حسابك لنظام كاشير Circle K:`,
+      ``,
+      `🏢 الفرع: ${branchName}`,
+      `🔒 الرمز السري (PIN): ${cashier.pin}`,
+      `⏱️ الوردية المسموحة: ${shiftName}`,
+      ``,
+      `🔗 رابط تسجيل الدخول:`,
+      `https://anh-zeta.vercel.app/cashier`,
+      ``,
+      `*يرجى الحفاظ على سرية هذا الرمز وعدم مشاركته.*`
+    ];
+    const message = lines.join("\n");
 
+    // Copy to clipboard so manager has full text ready to paste in all cases
+    if (typeof navigator !== "undefined" && navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(message).catch(() => {});
+    }
+
+    // Resolve employee phone if present in directory
+    const selectedEmp = employeesList.find(
+      emp => emp.id === cashier.employeeId || emp.name?.trim() === cashier.name?.trim()
+    );
+    let phoneParam = "";
+    if (selectedEmp?.phone) {
+      const digits = String(selectedEmp.phone).replace(/[^0-9]/g, "");
+      if (digits.length >= 9) {
+        const cleanPhone = digits.startsWith("20") ? digits : (digits.startsWith("0") ? "2" + digits : "20" + digits);
+        phoneParam = `phone=${cleanPhone}&`;
+      }
+    }
+
+    // Use direct api.whatsapp.com/send to prevent wa.me 302 redirect from mangling UTF-8 emojis/text
     const encoded = encodeURIComponent(message);
-    window.open(`https://wa.me/?text=${encoded}`, "_blank");
-    toast.success(`Opening WhatsApp dispatch for ${cashier.name}...`);
+    const waUrl = `https://api.whatsapp.com/send?${phoneParam}text=${encoded}`;
+    window.open(waUrl, "_blank");
+    toast.success(`Opening WhatsApp & copied full credentials for ${cashier.name}!`);
   };
 
   // Unique PIN Generator
@@ -1724,6 +1751,40 @@ export default function CashierManagementPage() {
                 >
                   <MessageSquare className="w-4 h-4" />
                   <span>Send Credentials via WhatsApp</span>
+                </button>
+
+                {/* Copy Formatted Credentials Button */}
+                <button
+                  onClick={() => {
+                    const isOla = justSavedCashier.branchId === "ola" || justSavedCashier.storeId?.toLowerCase().includes("ola");
+                    const branchName = isOla ? "Circle K - Ola El Koronfol" : "Circle K - El Alamein 4";
+                    let shiftName = "جميع الورديات (All Shifts)";
+                    if (justSavedCashier.shiftType === "Morning") shiftName = "وردية صباحية (Morning Shift)";
+                    else if (justSavedCashier.shiftType === "Noon") shiftName = "وردية مسائية (Noon Shift)";
+                    else if (justSavedCashier.shiftType === "Night") shiftName = "وردية ليلية (Night Shift)";
+
+                    const msg = [
+                      `مرحباً ${justSavedCashier.name}،`,
+                      `تم تجهيز حسابك لنظام كاشير Circle K:`,
+                      ``,
+                      `🏢 الفرع: ${branchName}`,
+                      `🔒 الرمز السري (PIN): ${justSavedCashier.pin}`,
+                      `⏱️ الوردية المسموحة: ${shiftName}`,
+                      ``,
+                      `🔗 رابط تسجيل الدخول:`,
+                      `https://anh-zeta.vercel.app/cashier`,
+                      ``,
+                      `*يرجى الحفاظ على سرية هذا الرمز وعدم مشاركته.*`
+                    ].join("\n");
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                      navigator.clipboard.writeText(msg);
+                    }
+                    toast.success("Full credentials copied to clipboard!");
+                  }}
+                  className="w-full py-2.5 px-4 rounded-2xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-bold text-xs flex items-center justify-center gap-2 transition-all active:scale-95"
+                >
+                  <Copy className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Copy Credentials Message</span>
                 </button>
 
                 {/* Print Badge Button */}
