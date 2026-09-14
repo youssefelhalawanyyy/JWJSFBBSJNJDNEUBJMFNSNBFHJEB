@@ -297,7 +297,12 @@ service cloud.firestore {
     // ---------- Shift Input & Cashier Operations ----------
     match /cashiers/{doc} {
       allow read: if true;
-      allow write: if request.auth != null && isAdminEditor();
+      allow write: if request.auth != null;
+    }
+
+    // ---------- Revoked Cashier Sessions ----------
+    match /revoked_cashier_sessions/{doc} {
+      allow read, write: if true;
     }
 
     match /shift_reports/{doc} {

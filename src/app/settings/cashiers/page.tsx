@@ -188,52 +188,87 @@ export default function CashierSettingsPage() {
       action: {
         label: "Delete & Logout All",
         onClick: async () => {
+          const toastId = toast.loading(`Deleting ${cashierName} and revoking sessions...`);
           try {
-            // 1. Immediately register in revoked_cashier_sessions to notify all listening devices
-            await setDoc(doc(db, "revoked_cashier_sessions", id), {
-              cashierId: id,
-              name: target?.name || "",
-              employeeId: target?.employeeId || "",
-              storeId: target?.storeId || "",
-              revokedAt: new Date().toISOString(),
-              deletedBy: currentUser?.email || "admin",
-              forceLogout: true
-            });
-
-            if (target?.name) {
-              const nameSlug = target.name.trim().toLowerCase().replace(/\s+/g, "_");
-              await setDoc(doc(db, "revoked_cashier_sessions", `name_${nameSlug}`), {
-                cashierId: id,
-                name: target.name,
-                revokedAt: new Date().toISOString(),
-                forceLogout: true
-              }).catch(() => {});
-            }
-
-            // 2. Query and terminate any active_sessions in Firestore matching this cashier
+            // 1. Attempt server-side admin deletion with elevated privileges
+            let apiSuccess = false;
             try {
-              const [q1, q2, q3] = await Promise.all([
-                getDocs(query(collection(db, "active_sessions"), where("cashierId", "==", id))),
-                target?.name ? getDocs(query(collection(db, "active_sessions"), where("userName", "==", target.name))) : null,
-                getDocs(query(collection(db, "active_sessions"), where("userId", "==", id)))
-              ]);
+              const token = await currentUser?.getIdToken().catch(() => null);
+              const userRole = localStorage.getItem("circlek_role") || "admin";
+              const queryParams = new URLSearchParams({
+                id,
+                name: target?.name || "",
+                employeeId: target?.employeeId || ""
+              });
 
-              const sessionsToPurge = new Map();
-              q1?.docs.forEach(d => sessionsToPurge.set(d.id, d.ref));
-              q2?.docs.forEach(d => sessionsToPurge.set(d.id, d.ref));
-              q3?.docs.forEach(d => sessionsToPurge.set(d.id, d.ref));
+              const res = await fetch(`/api/admin/cashiers?${queryParams.toString()}`, {
+                method: "DELETE",
+                headers: {
+                  "Content-Type": "application/json",
+                  ...(token ? { "Authorization": `Bearer ${token}` } : {}),
+                  "x-user-role": userRole
+                }
+              });
 
-              await Promise.all(Array.from(sessionsToPurge.values()).map(ref => 
-                updateDoc(ref, { forceLogout: true }).catch(() => {}).then(() => deleteDoc(ref).catch(() => {}))
-              ));
-            } catch (sessionErr) {
-              console.warn("Active sessions purge notice:", sessionErr);
+              if (res.ok) {
+                apiSuccess = true;
+              }
+            } catch (apiErr) {
+              console.warn("API cashier delete warning, falling back to direct Firestore delete:", apiErr);
             }
 
-            // 3. Delete the cashier document from cashiers collection
-            await deleteDoc(doc(db, "cashiers", id));
+            // 2. Direct client-side deletion fallback if server route was unavailable
+            if (!apiSuccess) {
+              // Register revocation so active devices trigger immediate logout
+              try {
+                await setDoc(doc(db, "revoked_cashier_sessions", id), {
+                  cashierId: id,
+                  name: target?.name || "",
+                  employeeId: target?.employeeId || "",
+                  storeId: target?.storeId || "",
+                  revokedAt: new Date().toISOString(),
+                  deletedBy: currentUser?.email || "admin",
+                  forceLogout: true
+                });
 
-            // 4. If current device is logged in with this cashier account, purge local session immediately
+                if (target?.name) {
+                  const nameSlug = target.name.trim().toLowerCase().replace(/\s+/g, "_");
+                  await setDoc(doc(db, "revoked_cashier_sessions", `name_${nameSlug}`), {
+                    cashierId: id,
+                    name: target.name,
+                    revokedAt: new Date().toISOString(),
+                    forceLogout: true
+                  }).catch(() => {});
+                }
+              } catch (revErr) {
+                console.warn("Client revoked_cashier_sessions write warning:", revErr);
+              }
+
+              // Terminate active_sessions
+              try {
+                const [q1, q2, q3] = await Promise.all([
+                  getDocs(query(collection(db, "active_sessions"), where("cashierId", "==", id))),
+                  target?.name ? getDocs(query(collection(db, "active_sessions"), where("userName", "==", target.name))) : null,
+                  getDocs(query(collection(db, "active_sessions"), where("userId", "==", id)))
+                ]);
+
+                const sessionsToPurge = new Map();
+                q1?.docs.forEach(d => sessionsToPurge.set(d.id, d.ref));
+                q2?.docs.forEach(d => sessionsToPurge.set(d.id, d.ref));
+                q3?.docs.forEach(d => sessionsToPurge.set(d.id, d.ref));
+
+                await Promise.all(Array.from(sessionsToPurge.values()).map(ref => 
+                  updateDoc(ref, { forceLogout: true }).catch(() => {}).then(() => deleteDoc(ref).catch(() => {}))
+                ));
+              } catch (sessionErr) {
+                console.warn("Active sessions purge notice:", sessionErr);
+              }
+
+              // Delete cashier doc directly from cashiers collection
+              await deleteDoc(doc(db, "cashiers", id));
+            }
+
+            // 3. Purge local session if current device is logged in as this cashier
             if (typeof window !== "undefined") {
               const currentLocal = localStorage.getItem("active_cashier_session");
               if (currentLocal) {
@@ -247,11 +282,15 @@ export default function CashierSettingsPage() {
               }
             }
 
-            fetchCashiers();
+            // 4. Update UI state immediately
+            setCashiers(prev => prev.filter(c => c.id !== id));
+            toast.dismiss(toastId);
             toast.success(`Cashier ${cashierName} removed and logged out of all connected devices.`);
-          } catch (e) {
-            console.error(e);
-            toast.error("Failed to delete cashier");
+            fetchCashiers();
+          } catch (e: any) {
+            console.error("Cashier delete error:", e);
+            toast.dismiss(toastId);
+            toast.error(`Failed to delete cashier: ${e?.message || "Unknown error"}`);
           }
         }
       }
