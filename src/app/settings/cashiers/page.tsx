@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import dynamic from "next/dynamic";
 import { db, auth } from "@/lib/firebase";
 import { onAuthStateChanged, User } from "firebase/auth";
 import { 
@@ -51,8 +52,16 @@ import {
   List,
   ChevronRight,
   UserCheck,
-  Power
+  Power,
+  MessageSquare,
+  QrCode,
+  Printer,
+  Share2,
+  ExternalLink
 } from "lucide-react";
+
+const QRCode = dynamic(() => import("react-qr-code"), { ssr: false });
+
 import { useBranch } from "@/context/BranchContext";
 import { toast } from "sonner";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -111,6 +120,12 @@ export default function CashierManagementPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<"add" | "edit">("add");
   const [submitting, setSubmitting] = useState(false);
+
+  // Badge Print Modal State
+  const [selectedBadgeCashier, setSelectedBadgeCashier] = useState<CashierProfile | null>(null);
+
+  // Post-Creation Success Modal State
+  const [justSavedCashier, setJustSavedCashier] = useState<CashierProfile | null>(null);
 
   // Form Fields
   const [editTargetId, setEditTargetId] = useState<string | null>(null);
@@ -176,6 +191,32 @@ export default function CashierManagementPage() {
     return activeSessions.some(
       s => (s.cashierId === cashier.id || s.userId === cashier.id || s.userName === cashier.name) && !s.forceLogout
     );
+  };
+
+  // 1-Click WhatsApp Onboarding Dispatch
+  const handleShareWhatsApp = (cashier: CashierProfile) => {
+    triggerHapticFeedback([15, 30]);
+    playPopSound();
+
+    const isOla = cashier.branchId === "ola" || cashier.storeId?.toLowerCase().includes("ola");
+    const branchName = isOla ? "Circle K - Ola El Koronfol" : "Circle K - El Alamein 4";
+
+    let shiftName = "جميع الورديات (All Shifts)";
+    if (cashier.shiftType === "Morning") shiftName = "وردية صباحية (Morning Shift)";
+    else if (cashier.shiftType === "Noon") shiftName = "وردية مسائية (Noon Shift)";
+    else if (cashier.shiftType === "Night") shiftName = "وردية ليلية (Night Shift)";
+
+    const message = `مرحباً ${cashier.name}، 
+تم تجهيز حسابك لنظام كاشير Circle K:
+🏢 الفرع: ${branchName}
+🔒 الرمز السري (PIN): ${cashier.pin}
+⏱️ الوردية المسموحة: ${shiftName}
+🔗 الرابط: https://anhreports.com/cashier
+*يرجى الحفاظ على سرية هذا الرمز وعدم مشاركته.*`;
+
+    const encoded = encodeURIComponent(message);
+    window.open(`https://wa.me/?text=${encoded}`, "_blank");
+    toast.success(`Opening WhatsApp dispatch for ${cashier.name}...`);
   };
 
   // Unique PIN Generator
@@ -309,18 +350,24 @@ export default function CashierManagementPage() {
         updatedAt: new Date().toISOString()
       };
 
+      let savedRecord: CashierProfile;
+
       if (modalMode === "edit" && editTargetId) {
         await updateDoc(doc(db, "cashiers", editTargetId), payload);
+        savedRecord = { id: editTargetId, ...payload };
         toast.success(`Updated credentials for ${formData.name}`);
       } else {
-        await addDoc(collection(db, "cashiers"), {
+        const docRef = await addDoc(collection(db, "cashiers"), {
           ...payload,
           createdAt: new Date().toISOString()
         });
+        savedRecord = { id: docRef.id, ...payload };
         toast.success(`Cashier ${formData.name} created successfully!`);
       }
 
       setIsModalOpen(false);
+      // Open post-save dispatch prompt
+      setJustSavedCashier(savedRecord);
     } catch (err: any) {
       console.error("Save cashier error:", err);
       toast.error(`Failed to save cashier: ${err.message || "Unknown error"}`);
@@ -508,25 +555,25 @@ export default function CashierManagementPage() {
       case "Morning":
         return {
           icon: <Sunrise className="w-3.5 h-3.5" />,
-          label: "Morning Shift (08:00 - 16:00)",
+          label: "Morning Shift",
           color: "bg-amber-500/10 text-amber-400 border-amber-500/25"
         };
       case "Noon":
         return {
           icon: <Sun className="w-3.5 h-3.5" />,
-          label: "Noon Shift (16:00 - 00:00)",
+          label: "Noon Shift",
           color: "bg-orange-500/10 text-orange-400 border-orange-500/25"
         };
       case "Night":
         return {
           icon: <Moon className="w-3.5 h-3.5" />,
-          label: "Night Shift (00:00 - 08:00)",
+          label: "Night Shift",
           color: "bg-indigo-500/10 text-indigo-400 border-indigo-500/25"
         };
       default:
         return {
           icon: <Sparkles className="w-3.5 h-3.5" />,
-          label: "All Shifts (Flexible)",
+          label: "All Shifts",
           color: "bg-emerald-500/10 text-emerald-400 border-emerald-500/25"
         };
     }
@@ -539,6 +586,13 @@ export default function CashierManagementPage() {
       name: isOla ? "Ola El Koronfol" : "El Alamein 4",
       color: isOla ? "text-purple-400 border-purple-500/20 bg-purple-500/10" : "text-cyan-400 border-cyan-500/20 bg-cyan-500/10"
     };
+  };
+
+  // Handle Badge Printing
+  const handlePrintBadge = () => {
+    triggerHapticFeedback([20, 30]);
+    playPopSound();
+    window.print();
   };
 
   if (loading) {
@@ -578,7 +632,7 @@ export default function CashierManagementPage() {
               </span>
             </h1>
             <p className="text-slate-400 text-sm max-w-2xl leading-relaxed">
-              Configure front-line cashier credentials, store assignments, allowed operational shift windows, and 4-digit security PIN tokens with real-time session revocation.
+              Configure front-line cashier credentials, store assignments, allowed operational shift windows, and 4-digit security PIN tokens with real-time session revocation and WhatsApp onboarding.
             </p>
           </div>
 
@@ -733,6 +787,23 @@ export default function CashierManagementPage() {
           </button>
         </div>
 
+        {/* Shift Filter Pills */}
+        <div className="flex items-center gap-1 bg-[#13192c] p-1 rounded-xl border border-white/5 text-xs font-medium">
+          {["all", "Morning", "Noon", "Night"].map((shift) => (
+            <button
+              key={shift}
+              onClick={() => setSelectedShiftFilter(shift)}
+              className={`px-2.5 py-1 rounded-lg transition-all ${
+                selectedShiftFilter === shift
+                  ? "bg-white/10 text-white font-bold"
+                  : "text-slate-400 hover:text-white"
+              }`}
+            >
+              {shift === "all" ? "All Shifts" : shift}
+            </button>
+          ))}
+        </div>
+
         {/* View Toggle */}
         <div className="flex items-center gap-1 bg-[#13192c] p-1 rounded-xl border border-white/5 self-end md:self-auto">
           <button
@@ -867,7 +938,7 @@ export default function CashierManagementPage() {
                     {/* Shift Badge */}
                     <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-bold border ${shiftStyle.color}`}>
                       {shiftStyle.icon}
-                      {cashier.shiftType || "All Shifts"}
+                      {shiftStyle.label}
                     </span>
 
                     {/* Scanner Privilege Badge */}
@@ -922,9 +993,31 @@ export default function CashierManagementPage() {
 
                 </div>
 
-                {/* Footer Action Buttons */}
+                {/* Footer Action Buttons with WhatsApp & Badge */}
                 <div className="mt-6 pt-4 border-t border-white/10 flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
+                    {/* 1-Click WhatsApp Dispatch */}
+                    <button
+                      onClick={() => handleShareWhatsApp(cashier)}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 font-bold text-xs border border-emerald-500/30 transition-all hover:scale-105 active:scale-95 shadow-sm"
+                      title="Share credentials via WhatsApp"
+                    >
+                      <MessageSquare className="w-3.5 h-3.5" />
+                      <span>WhatsApp</span>
+                    </button>
+
+                    {/* Printable POS QR Badge */}
+                    <button
+                      onClick={() => setSelectedBadgeCashier(cashier)}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 font-bold text-xs border border-purple-500/30 transition-all hover:scale-105 active:scale-95 shadow-sm"
+                      title="Print POS Quick-Login Badge"
+                    >
+                      <QrCode className="w-3.5 h-3.5" />
+                      <span>Badge</span>
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
                     {/* Force Remote Logout */}
                     {isOnline && (
                       <button
@@ -935,16 +1028,14 @@ export default function CashierManagementPage() {
                         <Power className="w-4 h-4" />
                       </button>
                     )}
-                  </div>
 
-                  <div className="flex items-center gap-2">
                     {!isManager && (
                       <button
                         onClick={() => handleOpenEditModal(cashier)}
-                        className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 font-bold text-xs border border-blue-500/20 transition-all hover:scale-105 active:scale-95"
+                        className="p-2 rounded-xl bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border border-blue-500/20 transition-all hover:scale-105 active:scale-95"
+                        title="Edit Cashier Profile"
                       >
-                        <Edit3 className="w-3.5 h-3.5" />
-                        Edit
+                        <Edit3 className="w-4 h-4" />
                       </button>
                     )}
                     {!isManager && (
@@ -974,10 +1065,10 @@ export default function CashierManagementPage() {
                 <tr>
                   <th className="p-4">Cashier Name</th>
                   <th className="p-4">Branch & Store</th>
-                  <th className="p-4">Shift Permission</th>
-                  <th className="p-4">Features</th>
+                  <th className="p-4">Shift Window</th>
                   <th className="p-4">Security PIN</th>
                   <th className="p-4">POS Status</th>
+                  <th className="p-4">Dispatch & Badges</th>
                   <th className="p-4 text-right">Actions</th>
                 </tr>
               </thead>
@@ -1009,17 +1100,8 @@ export default function CashierManagementPage() {
                       <td className="p-4">
                         <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-bold border ${shiftStyle.color}`}>
                           {shiftStyle.icon}
-                          {cashier.shiftType || "All Shifts"}
+                          {shiftStyle.label}
                         </span>
-                      </td>
-                      <td className="p-4">
-                        {cashier.features?.canUseMasterScanner ? (
-                          <span className="text-xs font-bold text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded-lg border border-cyan-500/20">
-                            Scanner Active
-                          </span>
-                        ) : (
-                          <span className="text-xs text-slate-500">Standard</span>
-                        )}
                       </td>
                       <td className="p-4">
                         <div className="flex items-center gap-2">
@@ -1049,6 +1131,24 @@ export default function CashierManagementPage() {
                         ) : (
                           <span className="text-xs text-slate-500">Offline</span>
                         )}
+                      </td>
+                      <td className="p-4">
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => handleShareWhatsApp(cashier)}
+                            className="p-2 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 transition-all hover:scale-105"
+                            title="Share credentials on WhatsApp"
+                          >
+                            <MessageSquare className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => setSelectedBadgeCashier(cashier)}
+                            className="p-2 rounded-xl bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 border border-purple-500/20 transition-all hover:scale-105"
+                            title="Print POS Quick-Login Badge"
+                          >
+                            <QrCode className="w-4 h-4" />
+                          </button>
+                        </div>
                       </td>
                       <td className="p-4 text-right space-x-2">
                         {!isManager && (
@@ -1336,6 +1436,226 @@ export default function CashierManagementPage() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* =========================================================================
+          6. POST-CREATION SUCCESS ONBOARDING PROMPT
+         ========================================================================= */}
+      <AnimatePresence>
+        {justSavedCashier && (
+          <div className="fixed inset-0 z-[10000] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setJustSavedCashier(null)}
+              className="absolute inset-0 bg-black/85 backdrop-blur-md"
+            />
+
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-md rounded-3xl bg-gradient-to-b from-[#141d33] to-[#0c1221] border border-emerald-500/30 p-6 sm:p-8 shadow-[0_0_60px_rgba(16,185,129,0.25)] text-center text-white space-y-6"
+            >
+              <div className="w-16 h-16 rounded-3xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center mx-auto text-emerald-400 shadow-inner">
+                <CheckCircle2 className="w-8 h-8" />
+              </div>
+
+              <div>
+                <h3 className="text-2xl font-black text-white">Cashier Account Ready!</h3>
+                <p className="text-sm text-slate-300 mt-1 font-semibold">
+                  {justSavedCashier.name}
+                </p>
+                <p className="text-xs text-slate-400 mt-1">
+                  Security PIN: <span className="font-mono font-bold text-red-400 tracking-widest">{justSavedCashier.pin}</span>
+                </p>
+              </div>
+
+              <div className="space-y-2.5">
+                {/* 1-Click WhatsApp Send */}
+                <button
+                  onClick={() => {
+                    handleShareWhatsApp(justSavedCashier);
+                  }}
+                  className="w-full py-3.5 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-sm flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-600/30 transition-all active:scale-95"
+                >
+                  <MessageSquare className="w-4 h-4" />
+                  <span>Send Credentials via WhatsApp</span>
+                </button>
+
+                {/* Print Badge Button */}
+                <button
+                  onClick={() => {
+                    const c = justSavedCashier;
+                    setJustSavedCashier(null);
+                    setSelectedBadgeCashier(c);
+                  }}
+                  className="w-full py-3 px-4 rounded-2xl bg-purple-600/20 hover:bg-purple-600/30 border border-purple-500/30 text-purple-300 font-bold text-sm flex items-center justify-center gap-2 transition-all"
+                >
+                  <QrCode className="w-4 h-4" />
+                  <span>Print POS Login Badge</span>
+                </button>
+
+                <button
+                  onClick={() => setJustSavedCashier(null)}
+                  className="w-full py-2.5 text-xs text-slate-400 hover:text-white transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* =========================================================================
+          7. PRINTABLE POS QUICK-LOGIN BADGE MODAL
+         ========================================================================= */}
+      <AnimatePresence>
+        {selectedBadgeCashier && (
+          <div className="fixed inset-0 z-[10001] flex items-center justify-center p-4">
+            
+            {/* Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setSelectedBadgeCashier(null)}
+              className="absolute inset-0 bg-black/90 backdrop-blur-md"
+            />
+
+            {/* Badge Modal Card */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-sm rounded-3xl bg-[#0d1222] border border-white/15 p-6 shadow-2xl text-white space-y-6 overflow-hidden"
+            >
+              <div className="flex items-center justify-between pb-3 border-b border-white/10">
+                <div className="flex items-center gap-2 text-purple-400 text-xs font-bold uppercase tracking-wider">
+                  <QrCode className="w-4 h-4" />
+                  <span>POS Access Pass</span>
+                </div>
+                <button
+                  onClick={() => setSelectedBadgeCashier(null)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* The Physical Badge Card Layout (Printable) */}
+              <div 
+                id="printable-cashier-badge"
+                className="relative rounded-2xl bg-white text-slate-900 p-6 shadow-xl border border-slate-200 overflow-hidden flex flex-col items-center text-center space-y-4"
+              >
+                {/* Circle K Red Top Header */}
+                <div className="w-full bg-gradient-to-r from-red-600 via-red-600 to-red-700 text-white py-3 px-4 -mx-6 -mt-6 flex items-center justify-between shadow-sm">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-white flex items-center justify-center text-red-600 font-black text-base shadow">
+                      K
+                    </div>
+                    <div className="text-left">
+                      <p className="text-[10px] font-black tracking-widest uppercase leading-none">Circle K</p>
+                      <p className="text-[9px] text-red-100 font-medium leading-none mt-0.5">
+                        {selectedBadgeCashier.branchId === "ola" || selectedBadgeCashier.storeId?.toLowerCase().includes("ola")
+                          ? "Ola El Koronfol"
+                          : "El Alamein 4"}
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-[9px] font-black uppercase tracking-wider bg-white/20 px-2 py-0.5 rounded text-white border border-white/30">
+                    POS Pass
+                  </span>
+                </div>
+
+                {/* Cashier Photo / Initials */}
+                <div className="pt-2">
+                  <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-slate-900 to-slate-800 text-white font-black text-xl flex items-center justify-center mx-auto shadow-md border-2 border-red-500">
+                    {selectedBadgeCashier.name.slice(0, 2)}
+                  </div>
+                  <h4 className="text-base font-black text-slate-900 mt-2 leading-tight">
+                    {selectedBadgeCashier.name}
+                  </h4>
+                  <p className="text-[11px] font-mono text-slate-500 font-bold">
+                    ID: {selectedBadgeCashier.storeId}
+                  </p>
+                </div>
+
+                {/* Encrypted QR Code for Instant Camera Login */}
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 shadow-inner inline-block">
+                  <QRCode
+                    value={`https://anhreports.com/cashier?auto_name=${encodeURIComponent(selectedBadgeCashier.name)}&auto_pin=${selectedBadgeCashier.pin}`}
+                    size={130}
+                    level="M"
+                  />
+                </div>
+
+                <div className="w-full bg-slate-100 rounded-xl p-2.5 border border-slate-200 flex items-center justify-between text-xs">
+                  <div>
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Allowed Shift</span>
+                    <span className="font-bold text-slate-800">
+                      {selectedBadgeCashier.shiftType || "All Shifts"}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider block">Security PIN</span>
+                    <span className="font-mono font-black text-red-600 text-sm tracking-wider">
+                      {selectedBadgeCashier.pin}
+                    </span>
+                  </div>
+                </div>
+
+                <p className="text-[8px] text-slate-400 uppercase tracking-widest font-semibold">
+                  Official Circle K Operational Access Token
+                </p>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="space-y-2">
+                <button
+                  onClick={handlePrintBadge}
+                  className="w-full py-3 rounded-2xl bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-bold text-sm flex items-center justify-center gap-2 shadow-lg shadow-red-600/30 transition-all active:scale-95"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>Print Pass (Thermal / Paper)</span>
+                </button>
+
+                <button
+                  onClick={() => handleShareWhatsApp(selectedBadgeCashier)}
+                  className="w-full py-2.5 rounded-2xl bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/25 font-bold text-xs flex items-center justify-center gap-2 transition-colors"
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  <span>Send Credentials on WhatsApp</span>
+                </button>
+              </div>
+
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Global CSS for Print Mode to print ONLY the badge */}
+      <style jsx global>{`
+        @media print {
+          body * {
+            visibility: hidden !important;
+          }
+          #printable-cashier-badge,
+          #printable-cashier-badge * {
+            visibility: visible !important;
+          }
+          #printable-cashier-badge {
+            position: absolute !important;
+            left: 0 !important;
+            top: 0 !important;
+            width: 80mm !important;
+            box-shadow: none !important;
+            border: 1px solid #ccc !important;
+            margin: 0 auto !important;
+          }
+        }
+      `}</style>
 
     </div>
   );
