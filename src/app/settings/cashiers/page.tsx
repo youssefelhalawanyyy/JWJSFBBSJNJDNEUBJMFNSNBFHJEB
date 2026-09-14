@@ -485,6 +485,14 @@ export default function CashierManagementPage() {
           deleteDoc(doc(db, "revoked_cashier_sessions", `name_${nameSlug}`)).catch(() => {})
         ]);
 
+        // Clean up any stale active_sessions so new session starts completely fresh
+        const sessionsSnap = await getDocs(
+          query(collection(db, "active_sessions"), where("cashierId", "==", cashier.id))
+        ).catch(() => null);
+        if (sessionsSnap && !sessionsSnap.empty) {
+          await Promise.all(sessionsSnap.docs.map(d => deleteDoc(d.ref).catch(() => {})));
+        }
+
         toast.dismiss(toastId);
         toast.success(`Cashier ${cashier.name} activated! Ready to use cashier portal.`);
       }

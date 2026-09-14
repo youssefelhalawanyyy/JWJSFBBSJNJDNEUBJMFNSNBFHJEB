@@ -80,32 +80,11 @@ export function CashierSessionGuard() {
         return;
       }
 
-      // Account is active: Clean up any stale leftover tombstones from previous deletions
-      const revokedSnap = await getDoc(doc(db, "revoked_cashier_sessions", cashierId)).catch(() => null);
-      if (revokedSnap?.exists()) {
-        const revData = revokedSnap.data();
-        if (revData?.status === "inactive" || (revData?.revokedAt && cashierData?.updatedAt && revData.revokedAt > cashierData.updatedAt)) {
-          terminateCashierSession("تم إنهاء صلاحية هذا الحساب عن بُعد من قبل الإدارة. تم تسجيل الخروج.");
-          return;
-        } else {
-          // Stale tombstone from an old deleted account - clean it up so it never interferes
-          deleteDoc(doc(db, "revoked_cashier_sessions", cashierId)).catch(() => {});
-        }
-      }
-
+      // Account is active in Firestore! Stale tombstones in revoked_cashier_sessions must be auto-purged
+      deleteDoc(doc(db, "revoked_cashier_sessions", cashierId)).catch(() => {});
       if (cashierName) {
         const nameSlug = cashierName.trim().toLowerCase().replace(/\s+/g, "_");
-        const revokedNameSnap = await getDoc(doc(db, "revoked_cashier_sessions", `name_${nameSlug}`)).catch(() => null);
-        if (revokedNameSnap?.exists()) {
-          const revNameData = revokedNameSnap.data();
-          if (revNameData?.status === "inactive" || (revNameData?.revokedAt && cashierData?.updatedAt && revNameData.revokedAt > cashierData.updatedAt)) {
-            terminateCashierSession("تم إنهاء صلاحية هذا الحساب عن بُعد من قبل الإدارة. تم تسجيل الخروج.");
-            return;
-          } else {
-            // Stale name slug tombstone from an old deleted account - auto-purge!
-            deleteDoc(doc(db, "revoked_cashier_sessions", `name_${nameSlug}`)).catch(() => {});
-          }
-        }
+        deleteDoc(doc(db, "revoked_cashier_sessions", `name_${nameSlug}`)).catch(() => {});
       }
     }).catch(() => {});
 
@@ -121,9 +100,24 @@ export function CashierSessionGuard() {
     });
 
     // 3. Real-time Firestore snapshot on revoked sessions by ID
-    const unsubRevoked = onSnapshot(doc(db, "revoked_cashier_sessions", cashierId), (snap) => {
+    const unsubRevoked = onSnapshot(doc(db, "revoked_cashier_sessions", cashierId), async (snap) => {
       if (snap.exists()) {
         const data = snap.data();
+        const sessionLoginTime = activeSession.loggedInAt || "";
+        // If revoked BEFORE current session logged in, it's an old tombstone: auto-purge and ignore!
+        if (data?.revokedAt && sessionLoginTime && data.revokedAt < sessionLoginTime) {
+          deleteDoc(doc(db, "revoked_cashier_sessions", cashierId)).catch(() => {});
+          return;
+        }
+
+        // Before kicking out, verify if cashier is actually inactive or deleted in Firestore
+        const cSnap = await getDoc(doc(db, "cashiers", cashierId)).catch(() => null);
+        if (cSnap?.exists() && cSnap.data()?.status !== "inactive") {
+          // Account is marked ACTIVE in cashiers collection! Stale revocation: auto-purge and allow!
+          deleteDoc(doc(db, "revoked_cashier_sessions", cashierId)).catch(() => {});
+          return;
+        }
+
         if (data?.forceLogout || data?.status === "inactive") {
           terminateCashierSession("تم إنهاء صلاحية هذا الحساب عن بُعد من قبل الإدارة. تم تسجيل الخروج.");
         }
@@ -136,10 +130,22 @@ export function CashierSessionGuard() {
     let unsubRevokedName: (() => void) | null = null;
     if (cashierName) {
       const nameSlug = cashierName.trim().toLowerCase().replace(/\s+/g, "_");
-      unsubRevokedName = onSnapshot(doc(db, "revoked_cashier_sessions", `name_${nameSlug}`), (snap) => {
+      unsubRevokedName = onSnapshot(doc(db, "revoked_cashier_sessions", `name_${nameSlug}`), async (snap) => {
         if (snap.exists()) {
           const data = snap.data();
-          if (data?.status === "inactive") {
+          const sessionLoginTime = activeSession.loggedInAt || "";
+          if (data?.revokedAt && sessionLoginTime && data.revokedAt < sessionLoginTime) {
+            deleteDoc(doc(db, "revoked_cashier_sessions", `name_${nameSlug}`)).catch(() => {});
+            return;
+          }
+
+          const cSnap = await getDoc(doc(db, "cashiers", cashierId)).catch(() => null);
+          if (cSnap?.exists() && cSnap.data()?.status !== "inactive") {
+            deleteDoc(doc(db, "revoked_cashier_sessions", `name_${nameSlug}`)).catch(() => {});
+            return;
+          }
+
+          if (data?.status === "inactive" || data?.forceLogout) {
             terminateCashierSession("تم إنهاء صلاحية هذا الحساب عن بُعد من قبل الإدارة. تم تسجيل الخروج.");
           }
         }

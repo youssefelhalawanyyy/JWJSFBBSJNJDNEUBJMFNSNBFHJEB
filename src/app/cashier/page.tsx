@@ -299,14 +299,13 @@ export default function CashierHubPage() {
               return;
             }
 
-            const revSnap = await getDoc(doc(db, "revoked_cashier_sessions", parsed.id)).catch(() => null);
-            if (revSnap?.exists() && (revSnap.data()?.status === "inactive" || revSnap.data()?.forceLogout)) {
-              localStorage.removeItem("active_cashier_session");
-              setAuthenticatedUser(null);
-              setLoading(false);
-              toast.error(lang === "en" ? "This account session was revoked." : "تم إنهاء صلاحية هذا الحساب.");
-              return;
+            // Account is active in Firestore! Stale tombstones in revoked_cashier_sessions must be auto-purged
+            deleteDoc(doc(db, "revoked_cashier_sessions", parsed.id)).catch(() => {});
+            if (parsed.name) {
+              const nameSlug = parsed.name.trim().toLowerCase().replace(/\s+/g, "_");
+              deleteDoc(doc(db, "revoked_cashier_sessions", `name_${nameSlug}`)).catch(() => {});
             }
+
             setAuthenticatedUser(parsed);
             setShowWelcome(true);
             setLoading(false);
@@ -322,24 +321,44 @@ export default function CashierHubPage() {
         localStorage.removeItem("active_cashier_session");
       }
     }
-    (async () => {
-      try {
-        const cashSnap = await getDocs(collection(db, "cashiers"));
-        // Cashiers collection is source of truth. Never auto-delete cashiers!
-        let list: any[] = cashSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-        
-        list.push({ id: "master_youssef", employeeId: "master_youssef", name: "Mr Youssef (Owner)", pin: "4321", role: "master", storeId: "ALL" });
-        setEmployees(list);
-      } catch (e) { console.error("Failed to load cashiers list:", e); }
-      finally { setLoading(false); }
-    })();
+
+    // Real-time snapshot listener for cashiers collection: instant sync when manager activates/deactivates!
+    const unsubCashiers = onSnapshot(collection(db, "cashiers"), (cashSnap) => {
+      let list: any[] = cashSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      list.push({ id: "master_youssef", employeeId: "master_youssef", name: "Mr Youssef (Owner)", pin: "4321", role: "master", storeId: "ALL" });
+      setEmployees(list);
+      setLoading(false);
+    }, (e) => {
+      console.error("Failed to load cashiers list:", e);
+      setLoading(false);
+    });
+
+    return () => {
+      unsubCashiers();
+    };
   }, []);
 
-  const handleLogin = (e: React.FormEvent | string) => {
+  const handleLogin = async (e: React.FormEvent | string) => {
     if (typeof e !== "string") e.preventDefault();
     if (!selectedEmployeeId) { toast.error(lang === "en" ? "Select your name first." : "اختر اسمك أولاً."); return; }
-    const user = employees.find(x => x.id === selectedEmployeeId);
-    if (!user) return;
+
+    let user: any = employees.find(x => x.id === selectedEmployeeId);
+    // Double-check latest live document directly from Firestore
+    if (selectedEmployeeId !== "master_youssef") {
+      try {
+        const freshSnap = await getDoc(doc(db, "cashiers", selectedEmployeeId));
+        if (freshSnap.exists()) {
+          user = { id: freshSnap.id, ...freshSnap.data() };
+        }
+      } catch (err) {
+        console.warn("Could not check live cashier doc on login:", err);
+      }
+    }
+
+    if (!user) {
+      toast.error(lang === "en" ? "Account not found." : "الحساب غير موجود.");
+      return;
+    }
 
     if (user.status === "inactive") {
       if (navigator.vibrate) navigator.vibrate([50, 100, 50]);
@@ -362,8 +381,25 @@ export default function CashierHubPage() {
       setTimeout(() => setPinError(false), 500);
       return;
     }
+
+    // Account is active and PIN verified! Auto-clean any residual revoked tombstones
+    const nameSlug = (user.name || "").trim().toLowerCase().replace(/\s+/g, "_");
+    await Promise.all([
+      deleteDoc(doc(db, "revoked_cashier_sessions", user.id)).catch(() => {}),
+      deleteDoc(doc(db, "revoked_cashier_sessions", `name_${nameSlug}`)).catch(() => {})
+    ]);
+
     playSuccessSound();
-    const session = { id: user.id, name: user.name, employeeId: user.employeeId || "", storeId: user.storeId || "N/A", branchId: user.branchId || "alamein4", role: user.position || user.role || "cashier", features: user.features || {}, loggedInAt: new Date().toISOString() };
+    const session = { 
+      id: user.id, 
+      name: user.name, 
+      employeeId: user.employeeId || "", 
+      storeId: user.storeId || "N/A", 
+      branchId: user.branchId || "alamein4", 
+      role: user.position || user.role || "cashier", 
+      features: user.features || {}, 
+      loggedInAt: new Date().toISOString() 
+    };
     localStorage.setItem("active_cashier_session", JSON.stringify(session));
     setPinInput("");
     setAuthenticatedUser(session);
