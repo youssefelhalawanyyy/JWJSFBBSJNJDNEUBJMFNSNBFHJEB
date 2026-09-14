@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { db, messaging, dbService } from "@/lib/firebase";
-import { collection, getDocs, deleteDoc, doc, getDoc } from "firebase/firestore";
+import { collection, getDocs, deleteDoc, doc, getDoc, onSnapshot } from "firebase/firestore";
 import { getToken } from "firebase/messaging";
 import { useRouter } from "next/navigation";
 import {
@@ -271,8 +271,46 @@ export default function CashierHubPage() {
   useEffect(() => {
     const saved = localStorage.getItem("active_cashier_session");
     if (saved) {
-      try { setAuthenticatedUser(JSON.parse(saved)); setShowWelcome(true); setLoading(false); return; }
-      catch { console.error("Bad session"); }
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed?.id === "master_youssef") {
+          setAuthenticatedUser(parsed);
+          setShowWelcome(true);
+          setLoading(false);
+          return;
+        }
+        if (parsed?.id) {
+          getDoc(doc(db, "cashiers", parsed.id)).then(async (snap) => {
+            if (!snap.exists()) {
+              console.warn("Cached cashier account no longer exists in Firestore. Purging session.");
+              localStorage.removeItem("active_cashier_session");
+              setAuthenticatedUser(null);
+              setLoading(false);
+              toast.error(lang === "en" ? "This cashier account was removed. Please log in again." : "تم حذف هذا الحساب من قبل الإدارة. يرجى تسجيل الدخول مجدداً.");
+              return;
+            }
+            const revSnap = await getDoc(doc(db, "revoked_cashier_sessions", parsed.id)).catch(() => null);
+            if (revSnap?.exists()) {
+              localStorage.removeItem("active_cashier_session");
+              setAuthenticatedUser(null);
+              setLoading(false);
+              toast.error(lang === "en" ? "This account session was revoked." : "تم إنهاء صلاحية هذا الحساب.");
+              return;
+            }
+            setAuthenticatedUser(parsed);
+            setShowWelcome(true);
+            setLoading(false);
+          }).catch(() => {
+            setAuthenticatedUser(parsed);
+            setShowWelcome(true);
+            setLoading(false);
+          });
+          return;
+        }
+      } catch {
+        console.error("Bad session");
+        localStorage.removeItem("active_cashier_session");
+      }
     }
     (async () => {
       try {
@@ -363,8 +401,61 @@ export default function CashierHubPage() {
   const handleLogout = () => {
     playPopSound();
     localStorage.removeItem("active_cashier_session");
+    sessionStorage.removeItem("active_cashier_session");
     setAuthenticatedUser(null); setSelectedEmployeeId(""); setPinInput("");
   };
+
+  // Real-time listener: Immediately log out if this cashier account is deleted or revoked by an admin
+  useEffect(() => {
+    if (!authenticatedUser?.id || authenticatedUser.id === "master_youssef") return;
+    const cashierId = authenticatedUser.id;
+
+    // 1. Direct document listener on cashiers collection
+    const unsubCashier = onSnapshot(doc(db, "cashiers", cashierId), (snap) => {
+      if (!snap.exists()) {
+        console.warn("Cashier account deleted in Firestore. Forcing logout.");
+        toast.error(
+          lang === "en" 
+            ? "This cashier account has been removed by an administrator. Logged out." 
+            : "تم حذف هذا الحساب من قبل الإدارة. تم تسجيل الخروج تلقائياً.",
+          { duration: 6000 }
+        );
+        handleLogout();
+      }
+    }, (err) => {
+      console.warn("Cashier snapshot error:", err);
+    });
+
+    // 2. Real-time listener on revoked_cashier_sessions
+    const unsubRevoked = onSnapshot(doc(db, "revoked_cashier_sessions", cashierId), (snap) => {
+      if (snap.exists()) {
+        console.warn("Cashier session revoked in Firestore. Forcing logout.");
+        toast.error(
+          lang === "en" 
+            ? "This account session has been revoked by an administrator. Logged out." 
+            : "تم إنهاء صلاحية هذا الحساب من قبل الإدارة. تم تسجيل الخروج.",
+          { duration: 6000 }
+        );
+        handleLogout();
+      }
+    }, (err) => {
+      console.warn("Revoked snapshot error:", err);
+    });
+
+    // 3. Local tab event from CashierSessionGuard
+    const handleSessionRevokedEvent = (e: any) => {
+      if (e.detail?.cashierId === cashierId) {
+        handleLogout();
+      }
+    };
+    window.addEventListener("cashier_session_revoked", handleSessionRevokedEvent);
+
+    return () => {
+      unsubCashier();
+      unsubRevoked();
+      window.removeEventListener("cashier_session_revoked", handleSessionRevokedEvent);
+    };
+  }, [authenticatedUser, lang]);
 
   const nav = (path: string) => { playPopSound(); router.push(path); };
   const isRTL = lang === "ar";

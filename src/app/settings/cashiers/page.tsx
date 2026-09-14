@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { db, auth } from "@/lib/firebase";
 import { onAuthStateChanged, User } from "firebase/auth";
-import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc } from "firebase/firestore";
+import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, setDoc, query, where } from "firebase/firestore";
 import { Users, Trash2, PlusCircle, Lock, Store, Clock, Building, Dices } from "lucide-react";
 import { useBranch } from "@/context/BranchContext";
 import { toast } from "sonner";
@@ -181,14 +181,74 @@ export default function CashierSettingsPage() {
       toast.error("Managers are not authorized to delete cashiers.");
       return;
     }
-    toast.warning("Remove this cashier?", {
+    const target = cashiers.find(c => c.id === id);
+    const cashierName = target?.name || "this cashier";
+
+    toast.warning(`Remove ${cashierName}? All users currently logged in from this account will be logged out immediately.`, {
       action: {
-        label: "Delete",
+        label: "Delete & Logout All",
         onClick: async () => {
           try {
+            // 1. Immediately register in revoked_cashier_sessions to notify all listening devices
+            await setDoc(doc(db, "revoked_cashier_sessions", id), {
+              cashierId: id,
+              name: target?.name || "",
+              employeeId: target?.employeeId || "",
+              storeId: target?.storeId || "",
+              revokedAt: new Date().toISOString(),
+              deletedBy: currentUser?.email || "admin",
+              forceLogout: true
+            });
+
+            if (target?.name) {
+              const nameSlug = target.name.trim().toLowerCase().replace(/\s+/g, "_");
+              await setDoc(doc(db, "revoked_cashier_sessions", `name_${nameSlug}`), {
+                cashierId: id,
+                name: target.name,
+                revokedAt: new Date().toISOString(),
+                forceLogout: true
+              }).catch(() => {});
+            }
+
+            // 2. Query and terminate any active_sessions in Firestore matching this cashier
+            try {
+              const [q1, q2, q3] = await Promise.all([
+                getDocs(query(collection(db, "active_sessions"), where("cashierId", "==", id))),
+                target?.name ? getDocs(query(collection(db, "active_sessions"), where("userName", "==", target.name))) : null,
+                getDocs(query(collection(db, "active_sessions"), where("userId", "==", id)))
+              ]);
+
+              const sessionsToPurge = new Map();
+              q1?.docs.forEach(d => sessionsToPurge.set(d.id, d.ref));
+              q2?.docs.forEach(d => sessionsToPurge.set(d.id, d.ref));
+              q3?.docs.forEach(d => sessionsToPurge.set(d.id, d.ref));
+
+              await Promise.all(Array.from(sessionsToPurge.values()).map(ref => 
+                updateDoc(ref, { forceLogout: true }).catch(() => {}).then(() => deleteDoc(ref).catch(() => {}))
+              ));
+            } catch (sessionErr) {
+              console.warn("Active sessions purge notice:", sessionErr);
+            }
+
+            // 3. Delete the cashier document from cashiers collection
             await deleteDoc(doc(db, "cashiers", id));
+
+            // 4. If current device is logged in with this cashier account, purge local session immediately
+            if (typeof window !== "undefined") {
+              const currentLocal = localStorage.getItem("active_cashier_session");
+              if (currentLocal) {
+                try {
+                  const parsed = JSON.parse(currentLocal);
+                  if (parsed.id === id || parsed.name === target?.name) {
+                    localStorage.removeItem("active_cashier_session");
+                    sessionStorage.removeItem("active_cashier_session");
+                  }
+                } catch (e) {}
+              }
+            }
+
             fetchCashiers();
-            toast.success("Cashier removed successfully");
+            toast.success(`Cashier ${cashierName} removed and logged out of all connected devices.`);
           } catch (e) {
             console.error(e);
             toast.error("Failed to delete cashier");

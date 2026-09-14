@@ -30,6 +30,7 @@ import { RemoteMessageOverlay, RemoteMessage } from "./RemoteMessageOverlay";
 import { RemoteLockOverlay } from "./RemoteLockOverlay";
 import EnterpriseLoginScreen from "./EnterpriseLoginScreen";
 import NotificationBell from "./NotificationBell";
+import { CashierSessionGuard } from "./CashierSessionGuard";
 
 export default function ClientLayoutWrapper({ children }: { children: React.ReactNode }) {
   const { currentBranch, setBranch, availableBranches, setAvailableBranches } = useBranch();
@@ -1216,6 +1217,7 @@ export default function ClientLayoutWrapper({ children }: { children: React.Reac
   if (pathname?.startsWith('/shift-reports/cashier') || pathname?.startsWith('/voids/cashier') || pathname?.startsWith('/cashier') || pathname?.startsWith('/expiries') || pathname?.startsWith('/checklists/cashier') || pathname?.startsWith('/inventory-audit/cashier') || pathname?.startsWith('/owner')) {
     return (
       <div className="h-[100dvh] w-full overflow-y-auto custom-scrollbar bg-background text-foreground transition-colors duration-300">
+        <CashierSessionGuard />
         <GlobalReminders />
         {children}
         <PwaInstallPrompt />
@@ -1262,6 +1264,7 @@ export default function ClientLayoutWrapper({ children }: { children: React.Reac
 
   return (
     <div className="h-[100dvh] w-full flex bg-background text-foreground transition-colors duration-300 overflow-hidden print:overflow-visible print:h-auto">
+      <CashierSessionGuard />
       <GlobalReminders />
 
       {/* Main Content Area - Full Desktop Width (No cramped left sidebar) */}
