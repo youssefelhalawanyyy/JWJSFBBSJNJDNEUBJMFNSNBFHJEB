@@ -12,6 +12,7 @@ import { BranchProvider } from "@/context/BranchContext";
 import { LanguageProvider } from "@/context/LanguageContext";
 import { BrandProvider } from "@/context/BrandContext";
 import { CommandBar } from "@/components/CommandBar";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 
 const inter = Inter({
   variable: "--font-sans",
@@ -81,6 +82,7 @@ export default function RootLayout({
                 <CommandBar />
                 <ClientLayoutWrapper>{children}</ClientLayoutWrapper>
                 <Toaster position="top-center" richColors closeButton theme="dark" />
+                <SpeedInsights />
               </LanguageProvider>
             </BranchProvider>
           </BrandProvider>
