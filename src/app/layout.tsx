@@ -4,14 +4,10 @@ import "./globals.css";
 import ClientLayoutWrapper from "@/components/ClientLayoutWrapper";
 import { Toaster } from "sonner";
 import { ThemeProvider } from "@/components/ThemeProvider";
-import { ThemeToggle } from "@/components/ThemeToggle";
-import { OfflineBanner } from "@/components/OfflineBanner";
 import { DynamicIsland } from "@/components/MobileUX/DynamicIsland";
-import { SuccessOverlay } from "@/components/MobileUX/SuccessOverlay";
 import { BranchProvider } from "@/context/BranchContext";
 import { LanguageProvider } from "@/context/LanguageContext";
 import { BrandProvider } from "@/context/BrandContext";
-import { CommandBar } from "@/components/CommandBar";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import { Analytics } from "@vercel/analytics/next";
 
@@ -79,10 +75,7 @@ export default function RootLayout({
           <BrandProvider>
             <BranchProvider>
               <LanguageProvider>
-                <OfflineBanner />
                 <DynamicIsland />
-                <SuccessOverlay />
-                <CommandBar />
                 <ClientLayoutWrapper>{children}</ClientLayoutWrapper>
                 <Toaster position="top-center" richColors closeButton theme="dark" />
                 <SpeedInsights />

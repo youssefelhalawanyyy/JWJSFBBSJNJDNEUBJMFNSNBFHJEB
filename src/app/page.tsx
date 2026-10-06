@@ -283,7 +283,7 @@ export default function VIPBentoEnterprisePortal() {
     }, () => {});
 
     // 7. Real 7-Day Sales Telemetry
-    const salesQ = query(collection(db, "sales"), limit(250));
+    const salesQ = query(collection(db, "sales"), orderBy("date", "desc"), limit(60));
     const unsubSales = onSnapshot(salesQ, (snap) => {
       const rawSales = snap.docs.map(d => ({ id: d.id, ...d.data() })) as any[];
       const branchSales = rawSales.filter(s => matchesBranch(s, currentBranch));

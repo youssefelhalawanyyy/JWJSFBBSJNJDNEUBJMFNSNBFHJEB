@@ -42,7 +42,7 @@ export default function ManagerVoidsPage() {
   }, []);
 
   useEffect(() => {
-    const q = query(collection(db, "void_requests"), orderBy("createdAt", "desc"), limit(500));
+    const q = query(collection(db, "void_requests"), orderBy("createdAt", "desc"), limit(100));
     const unsub = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       data.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());

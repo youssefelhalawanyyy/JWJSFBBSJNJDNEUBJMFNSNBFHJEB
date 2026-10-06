@@ -76,7 +76,7 @@ export default function EndShiftCashPage() {
     setLoading(true);
 
     // 1. Manual / Overridden end_shift_cash records
-    const endShiftQ = query(collection(db, "end_shift_cash"), orderBy("date", "desc"), limit(400));
+    const endShiftQ = query(collection(db, "end_shift_cash"), orderBy("date", "desc"), limit(150));
     const unsubEndShift = onSnapshot(endShiftQ, (snap) => {
       const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setManualRecords(docs);
@@ -85,7 +85,7 @@ export default function EndShiftCashPage() {
     });
 
     // 2. Shift Sales (Cash, Visa, Over/Short)
-    const salesQ = query(collection(db, "sales"), orderBy("date", "desc"), limit(800));
+    const salesQ = query(collection(db, "sales"), orderBy("date", "desc"), limit(250));
     const unsubSales = onSnapshot(salesQ, (snap) => {
       const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setRawSales(docs);
@@ -94,7 +94,7 @@ export default function EndShiftCashPage() {
     });
 
     // 3. Cash Payments (Deductions, Supplier & Maintenance details, PO numbers)
-    const payQ = query(collection(db, "cash_payments"), orderBy("date", "desc"), limit(800));
+    const payQ = query(collection(db, "cash_payments"), orderBy("date", "desc"), limit(250));
     const unsubPayments = onSnapshot(payQ, (snap) => {
       const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setRawPayments(docs);

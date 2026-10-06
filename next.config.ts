@@ -1,9 +1,12 @@
 import withPWAInit from "@ducanh2912/next-pwa";
+import path from "path";
+
+const isDev = process.env.NODE_ENV === "development";
 
 const withPWA = withPWAInit({
   dest: "public",
-  disable: process.env.NODE_ENV === "development",
-  register: true,
+  disable: isDev,
+  register: !isDev,
   cacheOnFrontEndNav: false,
   aggressiveFrontEndNavCaching: false,
   reloadOnOnline: true,
@@ -20,7 +23,19 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
+  serverExternalPackages: [
+    "firebase-admin",
+    "@google/generative-ai",
+  ],
+  onDemandEntries: {
+    maxInactiveAge: 60 * 1000,
+    pagesBufferLength: 5,
+  },
   experimental: {
+    staleTimes: {
+      dynamic: 30,
+      static: 180,
+    },
     optimizePackageImports: [
       "lucide-react",
       "recharts",
@@ -64,24 +79,6 @@ const nextConfig = {
           },
         ],
       },
-      {
-        source: "/_next/static/:path*",
-        headers: [
-          {
-            key: "Cache-Control",
-            value: "public, max-age=31536000, immutable",
-          },
-        ],
-      },
-      {
-        source: "/_next/image/:path*",
-        headers: [
-          {
-            key: "Cache-Control",
-            value: "public, max-age=86400, stale-while-revalidate=604800",
-          },
-        ],
-      },
     ];
   },
   async redirects() {
@@ -93,8 +90,10 @@ const nextConfig = {
       },
     ];
   },
-  turbopack: {},
+  turbopack: {
+    root: path.resolve(__dirname),
+  },
 };
 
-export default withPWA(nextConfig);
+export default isDev ? nextConfig : withPWA(nextConfig);
 

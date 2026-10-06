@@ -8,15 +8,13 @@ import { auth, messaging, dbService, db } from "@/lib/firebase";
 import { getToken } from "firebase/messaging";
 import { signInWithEmailAndPassword, onAuthStateChanged, signOut, updateProfile, setPersistence, browserLocalPersistence, indexedDBLocalPersistence } from "firebase/auth";
 import { collection, query, where, onSnapshot, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, orderBy, limit } from "firebase/firestore";
-import PwaInstallPrompt from "./PwaInstallPrompt";
 import type { User as FirebaseUser } from "firebase/auth";
 import { useBranch, BranchId, BRANCHES } from "@/context/BranchContext";
 import { useLanguage } from "@/context/LanguageContext";
+import dynamic from "next/dynamic";
 import { useBrand } from "@/context/BrandContext";
 import { ThemeToggle } from "./ThemeToggle";
 import { Store, Languages } from "lucide-react";
-import GlobalReminders from "./GlobalReminders";
-import { IdleScreensaver } from "./IdleScreensaver";
 import { motion, AnimatePresence } from "framer-motion";
 import toast from "react-hot-toast";
 import { ManagerBottomNav } from "./MobileUX/ManagerBottomNav";
@@ -24,13 +22,20 @@ import { MobileHeader } from "./MobileUX/MobileHeader";
 import { updateAppBadge, sendManagerInteractiveNotification, triggerHapticFeedback } from "@/lib/pwaBadges";
 import { playPopSound } from "@/lib/sounds";
 import { audioChimes } from "@/lib/audio-chimes";
-
-import WelcomeModal from "./WelcomeModal";
-import { RemoteMessageOverlay, RemoteMessage } from "./RemoteMessageOverlay";
-import { RemoteLockOverlay } from "./RemoteLockOverlay";
-import EnterpriseLoginScreen from "./EnterpriseLoginScreen";
 import NotificationBell from "./NotificationBell";
-import { CashierSessionGuard } from "./CashierSessionGuard";
+import type { RemoteMessage } from "./RemoteMessageOverlay";
+
+const WelcomeModal = dynamic(() => import("./WelcomeModal"), { ssr: false });
+const RemoteMessageOverlay = dynamic(() => import("./RemoteMessageOverlay").then(m => m.RemoteMessageOverlay), { ssr: false });
+const RemoteLockOverlay = dynamic(() => import("./RemoteLockOverlay").then(m => m.RemoteLockOverlay), { ssr: false });
+const EnterpriseLoginScreen = dynamic(() => import("./EnterpriseLoginScreen"), { ssr: false });
+const IdleScreensaver = dynamic(() => import("./IdleScreensaver").then(m => m.IdleScreensaver), { ssr: false });
+const GlobalReminders = dynamic(() => import("./GlobalReminders"), { ssr: false });
+const PwaInstallPrompt = dynamic(() => import("./PwaInstallPrompt"), { ssr: false });
+const CashierSessionGuard = dynamic(() => import("./CashierSessionGuard").then(m => m.CashierSessionGuard), { ssr: false });
+const OfflineBanner = dynamic(() => import("./OfflineBanner").then(m => m.OfflineBanner), { ssr: false });
+const SuccessOverlay = dynamic(() => import("./MobileUX/SuccessOverlay").then(m => m.SuccessOverlay), { ssr: false });
+const CommandBar = dynamic(() => import("./CommandBar").then(m => m.CommandBar), { ssr: false });
 
 export default function ClientLayoutWrapper({ children }: { children: React.ReactNode }) {
   const { currentBranch, setBranch, availableBranches, setAvailableBranches } = useBranch();
@@ -881,7 +886,7 @@ export default function ClientLayoutWrapper({ children }: { children: React.Reac
 
     return () => {
       if (unsubSession) unsubSession();
-      unsubUser();
+      if (typeof unsubUser === "function") unsubUser();
       clearInterval(heartbeat);
       window.removeEventListener("visibilitychange", handleVisibility);
       window.removeEventListener("pagehide", handleOffline);
@@ -898,6 +903,7 @@ export default function ClientLayoutWrapper({ children }: { children: React.Reac
     let unsubscribeShifts: any = null;
     let unsubscribeVoids: any = null;
     let unsubscribeExpiries: any = null;
+    let unsubscribeReturns: any = null;
     let unsubscribeOos: any = null;
     let unsubscribeSystemNotifs: any = null;
 
@@ -959,7 +965,7 @@ export default function ClientLayoutWrapper({ children }: { children: React.Reac
         limit(50)
       );
 
-      const unsubscribeReturns = onSnapshot(returnsQ, (snap) => {
+      unsubscribeReturns = onSnapshot(returnsQ, (snap) => {
         let count = 0;
         snap.docs.forEach(doc => {
           const d = doc.data();
@@ -1013,6 +1019,7 @@ export default function ClientLayoutWrapper({ children }: { children: React.Reac
       if (unsubscribeShifts) unsubscribeShifts();
       if (unsubscribeVoids) unsubscribeVoids();
       if (unsubscribeExpiries) unsubscribeExpiries();
+      if (unsubscribeReturns) unsubscribeReturns();
       if (unsubscribeOos) unsubscribeOos();
       if (unsubscribeSystemNotifs) unsubscribeSystemNotifs();
     };
@@ -1250,6 +1257,8 @@ export default function ClientLayoutWrapper({ children }: { children: React.Reac
   if (pathname?.startsWith('/shift-reports/cashier') || pathname?.startsWith('/voids/cashier') || pathname?.startsWith('/cashier') || pathname?.startsWith('/expiries') || pathname?.startsWith('/checklists/cashier') || pathname?.startsWith('/inventory-audit/cashier') || pathname?.startsWith('/owner')) {
     return (
       <div className="h-[100dvh] w-full overflow-y-auto custom-scrollbar bg-background text-foreground transition-colors duration-300">
+        <OfflineBanner />
+        <SuccessOverlay />
         <CashierSessionGuard />
         <GlobalReminders />
         {children}
@@ -1297,6 +1306,9 @@ export default function ClientLayoutWrapper({ children }: { children: React.Reac
 
   return (
     <div className="h-[100dvh] w-full flex bg-background text-foreground transition-colors duration-300 overflow-hidden print:overflow-visible print:h-auto">
+      <OfflineBanner />
+      <SuccessOverlay />
+      <CommandBar />
       <CashierSessionGuard />
       <GlobalReminders />
 

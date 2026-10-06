@@ -51,3 +51,5 @@ cashier-apk/android/app/build
 cashier-apk/android/.gradle
 cashier-apk/android/app/build/
 cashier-apk/android/local.properties
+cashier-apk/**/.gradle
+**/.gradle
